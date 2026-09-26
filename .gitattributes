@@ -1,0 +1,19 @@
+# Normalize line endings in the repo; check out native endings per platform
+* text=auto
+
+# Windows-only files keep CRLF
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.sln     text eol=crlf
+*.vcxproj text eol=crlf
+
+# Binary assets
+*.wav  binary
+*.aif  binary
+*.aiff binary
+*.flac binary
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.icns binary
+*.ico  binary

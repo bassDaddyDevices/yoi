@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Build output
+build/
+build-*/
+cmake-build-*/
+out/
+
+# CMake
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Editors and tooling
+.idea/
+.vscode/
+.cache/
