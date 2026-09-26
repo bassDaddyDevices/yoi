@@ -30,6 +30,11 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	public override var outputBusses: AUAudioUnitBusArray {
 		return _outputBusses
 	}
+
+    /// No inputs; mono or stereo out. The voice is mono and is copied to every output channel.
+    public override var channelCapabilities: [NSNumber] {
+        return [0, 1, 0, 2]
+    }
     
     public override var  maximumFramesToRender: AUAudioFrameCount {
         get {
@@ -111,7 +116,30 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			guard let value = valuePtr?.pointee else {
 				return "-"
 			}
-			return NSString.localizedStringWithFormat("%.f", value) as String
+
+            switch param.unit {
+            case .decibels:
+                return String(format: "%.1f dB", value)
+            case .percent:
+                return String(format: "%.0f%%", value)
+            case .hertz:
+                return value >= 1000 ? String(format: "%.2f kHz", value / 1000) : String(format: "%.0f Hz", value)
+            case .milliseconds:
+                if value >= 1000 {
+                    return String(format: "%.2f s", value / 1000)
+                }
+                return String(format: value < 10 ? "%.1f ms" : "%.0f ms", value)
+            case .relativeSemiTones:
+                return String(format: "%.0f st", value)
+            case .indexed:
+                let index = Int(value.rounded())
+                if let strings = param.valueStrings, strings.indices.contains(index) {
+                    return strings[index]
+                }
+                return String(index)
+            default:
+                return String(format: "%.2f", value)
+            }
 		}
 	}
 }
