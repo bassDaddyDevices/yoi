@@ -10,13 +10,13 @@
 			<array>
 				<dict>
 					<key>description</key>
-					<string>YoiExtension</string>
+					<string>Bass Daddy Devices: YOI</string>
 					<key>factoryFunction</key>
 					<string>$(PRODUCT_MODULE_NAME).AudioUnitViewController</string>
 					<key>manufacturer</key>
 					<string>Bsdd</string>
 					<key>name</key>
-					<string>Bass Daddy Devices: YoiExtension</string>
+					<string>Bass Daddy Devices: YOI</string>
 					<key>sandboxSafe</key>
 					<true/>
 					<key>subtype</key>
