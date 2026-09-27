@@ -1,7 +1,8 @@
 // bdd-controls.js
-// Bass Daddy Devices controls: knobs, switches, screen readouts and pop-up menus, each bound to
-// one plug-in parameter from the descriptor. Shared by every Bass Daddy Devices synth; the
-// synth's panel decides where they go, what they're called and what colour they are.
+// Bass Daddy Devices controls: knobs, sliders, switches, screen readouts and pop-up menus, each
+// bound to one plug-in parameter from the descriptor, plus page tabs. Shared by every Bass Daddy
+// Devices synth; the synth's panel decides where they go, what they're called and what colour
+// they are.
 //
 // Every change goes to the plug-in as a gesture (bdd.beginEdit, bdd.edit, bdd.endEdit), which is
 // what hosts record automation from. Each control has `set(value)` for values coming back from
@@ -338,6 +339,133 @@
         return control;
     }
 
+    // MARK: - Slider
+
+    /**
+     * A chunky vertical fader: a black track that fills with colour, a cap to grab, the name on
+     * top and the value underneath. Drags like a knob, one pixel per pixel, so the cap stays
+     * under the pointer.
+     *   options: { label, color, height (track, px), format(value), onChange(value) }
+     */
+    function slider(parameter, options = {}) {
+        const height = options.height || 180;
+        const capHeight = 18;
+        const travel = height - capHeight;
+
+        const element = document.createElement('div');
+        element.className = 'slider';
+        makeSlider(element, parameter, options.label);
+        element.setAttribute('aria-orientation', 'vertical');
+        if (options.color) {
+            element.style.setProperty('--slider-color', options.color);
+        }
+
+        const name = document.createElement('div');
+        name.className = 'slider-label';
+        name.textContent = (options.label || parameter.name).toUpperCase();
+        const track = document.createElement('div');
+        track.className = 'slider-track';
+        track.style.height = `${height}px`;
+        const fill = document.createElement('div');
+        fill.className = 'slider-fill';
+        const cap = document.createElement('div');
+        cap.className = 'slider-cap';
+        cap.style.height = `${capHeight}px`;
+        track.append(fill, cap);
+        const readout = document.createElement('div');
+        readout.className = 'slider-value';
+        element.append(name, track, readout);
+
+        const text = options.format || ((value) => format(parameter, value));
+        const control = {
+            element,
+            parameter,
+            value: parameter.default ?? parameter.min,
+            set(value) {
+                if (control.gesture.active) {
+                    return;
+                }
+                show(value);
+            },
+        };
+        function show(value) {
+            control.value = value;
+            const offset = toPosition(parameter, value) * travel;
+            cap.style.bottom = `${offset}px`;
+            fill.style.height = `${offset + capHeight / 2}px`;
+            readout.textContent = text(value);
+            describe(element, parameter, value);
+        }
+        control.gesture = makeGesture(parameter, (value) => {
+            show(value);
+            if (options.onChange) {
+                options.onChange(value);
+            }
+        });
+        attachDragging(element, parameter, control, { pixelsForFullRange: travel });
+        show(control.value);
+        return control;
+    }
+
+    // MARK: - Tabs
+
+    /**
+     * Page tabs, like Max's live.tab: a row of buttons, one lit. Not tied to a parameter.
+     *   options: { selected, onSelect(index), label }
+     */
+    function tabs(names, options = {}) {
+        const element = document.createElement('div');
+        element.className = 'tabs';
+        element.setAttribute('role', 'tablist');
+        if (options.label) {
+            element.setAttribute('aria-label', options.label);
+        }
+        let current = -1;
+        const buttons = names.map((name, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'tab';
+            button.setAttribute('role', 'tab');
+            button.setAttribute('aria-label', name);
+            button.appendChild(bdd.pixel.text(name.toUpperCase(), 2));
+            button.addEventListener('click', () => select(index, true));
+            button.addEventListener('keydown', (event) => {
+                const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+                if (step !== 0) {
+                    event.preventDefault();
+                    const next = (current + step + names.length) % names.length;
+                    select(next, true);
+                    buttons[next].focus();
+                }
+            });
+            element.appendChild(button);
+            return button;
+        });
+        function select(index, fromUser) {
+            if (index === current || index < 0 || index >= names.length) {
+                return;
+            }
+            current = index;
+            buttons.forEach((button, i) => {
+                button.classList.toggle('selected', i === index);
+                button.setAttribute('aria-selected', String(i === index));
+                button.tabIndex = i === index ? 0 : -1;
+            });
+            if (fromUser && options.onSelect) {
+                options.onSelect(index);
+            }
+        }
+        select(options.selected || 0, false);
+        return {
+            element,
+            buttons,
+            select: (index) => select(index, true),
+            get selected() {
+                return current;
+            },
+        };
+    }
+
     // MARK: - Switch
 
     /**
@@ -543,6 +671,8 @@
         fromPosition,
         format,
         knob,
+        slider,
+        tabs,
         segmented,
         readout,
         openMenu,

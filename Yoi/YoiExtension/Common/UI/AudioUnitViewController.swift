@@ -22,7 +22,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     /// false to get it back, for example if a host can't show the web view.
     var webEditor: WebEditor?
     static let useWebEditor = true
-    static let editorSize = NSSize(width: 940, height: 600)   // the page's design size; it scales to fit
+    static let editorSize = NSSize(width: 940, height: 410)   // the page's design size; it scales to fit
     
     private var observation: NSKeyValueObservation?
 

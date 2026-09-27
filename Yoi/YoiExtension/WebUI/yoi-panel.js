@@ -8,9 +8,9 @@
 (function () {
     'use strict';
 
-    const { knob, segmented, readout, format, openMenu } = bdd.controls;
+    const { knob, slider, tabs, segmented, readout, format, openMenu } = bdd.controls;
     const STAGE_WIDTH = 940;
-    const STAGE_HEIGHT = 600;
+    const STAGE_HEIGHT = 410;
 
     // MARK: - Layout
 
@@ -20,82 +20,82 @@
         return Math.round(value) + '%';
     };
 
-    /** The four knobs beside the screen, and grit: the controls that make the yoi. */
-    const CORE = [
-        [
-            {
-                title: 'FILTER', color: 'var(--blue)',
-                knobs: [
-                    { id: 'cutoff', label: 'CUTOFF' },
-                    { id: 'resonance', label: 'RES' },
-                ],
-                switches: [{ id: 'filterMode', column: '1 / span 2', labels: ['LP', 'BP'] }],
-            },
-            {
-                title: 'ENV', color: 'var(--pink)',
-                knobs: [{ id: 'envAmount', label: 'AMOUNT' }],
-            },
-        ],
-        [
-            {
-                title: 'GRIT', color: 'var(--yellow)',
-                knobs: [
-                    { id: 'dsRate', label: 'S&H RATE' },
-                    { id: 'dsAmount', label: 'DS AMOUNT' },
-                    { id: 'cleanupMultiple', label: 'CLEAN-UP' },
-                ],
-                switches: [
-                    { id: 'dsMode', column: '1 / span 2', labels: ['OFF', 'S&H', 'DOWNSAMPLE'] },
-                    { id: 'cleanupMode', column: '3', labels: ['OFF', 'ON'] },
-                ],
-            },
-        ],
+    const BLUE = 'var(--blue)';
+    const PINK = 'var(--pink)';
+    const YELLOW = 'var(--yellow)';
+    const ORANGE = 'var(--orange)';
+    const GREEN = 'var(--green)';
+    const PURPLE = 'var(--purple)';
+    const CORAL = 'var(--coral)';
+    const CREAM = 'var(--cream)';
+
+    /**
+     * The pages beside the screen, picked with the tabs above them. Each knob page is a 3 × 2
+     * grid; a switch sits under the knob it belongs to (`column` is a CSS grid column).
+     * A knob with two `ids` is one knob that shows whichever parameter its switch has selected.
+     */
+    const PAGES = [
+        {
+            name: 'YOI',
+            rows: [
+                {
+                    knobs: [
+                        { id: 'cutoff', label: 'CUTOFF', color: BLUE },
+                        { id: 'resonance', label: 'RES', color: BLUE },
+                        { id: 'envAmount', label: 'ENV AMOUNT', color: PINK },
+                    ],
+                    switches: [{ id: 'filterMode', labels: ['LP', 'BP'], color: BLUE, column: '1 / span 2' }],
+                },
+                {
+                    knobs: [
+                        { ids: ['dsRate', 'dsAmount'], label: 'DOWNSAMPLE', color: YELLOW },
+                        { id: 'cleanupMultiple', label: 'CLEAN-UP', color: YELLOW },
+                        { id: 'foldAmount', label: 'FOLD', color: ORANGE },
+                    ],
+                    switches: [
+                        { id: 'dsMode', labels: ['OFF', 'kHz', '%'], color: YELLOW, column: '1' },
+                        { id: 'cleanupMode', labels: ['OFF', 'ON'], color: YELLOW, column: '2' },
+                        { id: 'foldPosition', labels: ['PRE-FILT', 'PRE-DS'], color: ORANGE, column: '3' },
+                    ],
+                },
+            ],
+        },
+        {
+            name: 'OSC',
+            rows: [
+                {
+                    knobs: [
+                        { id: 'oscShape', label: 'SHAPE', color: GREEN, format: percentOr('Saw', 'Square') },
+                        { id: 'subLevel', label: 'SUB', color: GREEN },
+                        { id: 'subShape', label: 'SUB SHAPE', color: GREEN, format: percentOr('Sine', 'Triangle') },
+                    ],
+                    switches: [{ id: 'subOctave', labels: ['-1 OCT', '-2 OCT'], color: GREEN, column: '2' }],
+                },
+                {
+                    knobs: [
+                        { id: 'subCrossover', label: 'X-OVER', color: GREEN },
+                        { id: 'glideTime', label: 'GLIDE', color: CORAL },
+                        { id: 'bendRange', label: 'BEND', color: CORAL },
+                    ],
+                    switches: [{ id: 'glideMode', labels: ['LEGATO', 'ALWAYS'], color: CORAL, column: '2 / span 2' }],
+                },
+            ],
+        },
+        {
+            name: 'AMP',
+            sliders: [
+                { id: 'ampAttack', label: 'ATTACK', color: PURPLE },
+                { id: 'ampDecay', label: 'DECAY', color: PURPLE },
+                { id: 'ampSustain', label: 'SUSTAIN', color: PURPLE },
+                { id: 'ampRelease', label: 'RELEASE', color: PURPLE },
+            ],
+            knobs: [{ id: 'outputLevel', label: 'LEVEL', color: CREAM }],
+        },
     ];
 
-    /** Everything else, along the bottom. */
-    const RACK = [
-        {
-            title: 'OSC', color: 'var(--green)',
-            knobs: [
-                { id: 'oscShape', label: 'SHAPE', format: percentOr('Saw', 'Square') },
-                { id: 'subLevel', label: 'SUB' },
-                { id: 'subShape', label: 'SUB SHAPE', format: percentOr('Sine', 'Triangle') },
-            ],
-            switches: [{ id: 'subOctave', column: '2 / span 2', labels: ['-1 OCT', '-2 OCT'] }],
-        },
-        {
-            title: 'FOLD', color: 'var(--orange)',
-            knobs: [{ id: 'foldAmount', label: 'FOLD' }],
-            switches: [{ id: 'foldPosition', column: '1', labels: ['PRE-FILT', 'PRE-DS'] }],
-        },
-        {
-            title: 'AMP', color: 'var(--purple)',
-            knobs: [
-                { id: 'ampAttack', label: 'ATTACK' },
-                { id: 'ampDecay', label: 'DECAY' },
-                { id: 'ampSustain', label: 'SUSTAIN' },
-                { id: 'ampRelease', label: 'RELEASE' },
-            ],
-        },
-        {
-            title: 'VOICE', color: 'var(--coral)',
-            knobs: [
-                { id: 'glideTime', label: 'GLIDE' },
-                { id: 'bendRange', label: 'BEND' },
-            ],
-            switches: [{ id: 'glideMode', column: '1 / span 2', labels: ['LEGATO', 'ALWAYS'] }],
-        },
-        {
-            title: 'OUT', color: 'var(--cream)',
-            knobs: [{ id: 'outputLevel', label: 'LEVEL' }],
-        },
-    ];
-
-    // Knob sizes, and column widths that line the knobs up (the core is a 3 × 2 grid).
-    const CORE_KNOB = 64;
-    const CORE_COLUMN = 122;
-    const RACK_KNOB = 48;
-    const RACK_COLUMN = 76;
+    const KNOB_SIZE = 64;
+    const COLUMN_WIDTH = 122;
+    const SLIDER_HEIGHT = 196;
 
     /** Directions as the mock-up shows them ("DIR: <-->"), short on the screen, long in the menu. */
     const DIRECTIONS = [
@@ -149,52 +149,119 @@
         return svg;
     }
 
-    function buildGroup(spec, knobSize, columnWidth) {
-        const group = document.createElement('div');
-        group.className = 'group';
-        group.style.setProperty('--group-color', spec.color);
+    function makeKnob(identifier, item) {
+        const parameter = parameters.get(identifier);
+        if (!parameter) {
+            return null;
+        }
+        const control = knob(parameter, {
+            label: item.label,
+            color: item.color,
+            size: KNOB_SIZE,
+            format: item.format,
+            onChange: changed(identifier),
+        });
+        control.element.dataset.parameter = identifier;
+        register(identifier, control);
+        return control.element;
+    }
 
-        const title = document.createElement('div');
-        title.className = 'group-title';
-        title.appendChild(pixel(spec.title, 2));
-        group.appendChild(title);
+    function buildKnobPage(page, container) {
+        const grid = document.createElement('div');
+        grid.className = 'page-grid';
+        grid.style.gridTemplateColumns = `repeat(3, ${COLUMN_WIDTH}px)`;
+        page.rows.forEach((row, rowIndex) => {
+            row.knobs.forEach((item, columnIndex) => {
+                const cell = document.createElement('div');
+                cell.className = 'page-cell';
+                cell.style.gridColumn = String(columnIndex + 1);
+                cell.style.gridRow = String(rowIndex * 2 + 1);
+                for (const identifier of item.ids || [item.id]) {
+                    const element = makeKnob(identifier, item);
+                    if (element) {
+                        cell.appendChild(element);
+                    }
+                }
+                grid.appendChild(cell);
+            });
+            for (const item of row.switches || []) {
+                const parameter = parameters.get(item.id);
+                if (!parameter) {
+                    continue;
+                }
+                const control = segmented(parameter, {
+                    labels: item.labels,
+                    color: item.color,
+                    onChange: changed(item.id),
+                });
+                control.element.style.gridColumn = item.column;
+                control.element.style.gridRow = String(rowIndex * 2 + 2);
+                grid.appendChild(control.element);
+                register(item.id, control);
+            }
+        });
+        container.appendChild(grid);
+    }
 
-        const body = document.createElement('div');
-        body.className = 'group-body';
-        body.style.gridTemplateColumns = `repeat(${spec.knobs.length}, ${columnWidth}px)`;
-        group.appendChild(body);
-
-        for (const item of spec.knobs) {
+    function buildSliderPage(page, container) {
+        const row = document.createElement('div');
+        row.className = 'page-sliders';
+        const faders = document.createElement('div');
+        faders.className = 'slider-group';
+        for (const item of page.sliders) {
             const parameter = parameters.get(item.id);
             if (!parameter) {
                 continue;
             }
-            const control = knob(parameter, {
+            const control = slider(parameter, {
                 label: item.label,
-                color: spec.color,
-                size: knobSize,
-                format: item.format,
+                color: item.color,
+                height: SLIDER_HEIGHT,
                 onChange: changed(item.id),
             });
-            body.appendChild(control.element);
+            faders.appendChild(control.element);
             register(item.id, control);
         }
-        for (const item of spec.switches || []) {
-            const parameter = parameters.get(item.id);
-            if (!parameter) {
-                continue;
+        row.appendChild(faders);
+        for (const item of page.knobs || []) {
+            const element = makeKnob(item.id, item);
+            if (element) {
+                row.appendChild(element);
             }
-            const control = segmented(parameter, {
-                labels: item.labels,
-                color: spec.color,
-                onChange: changed(item.id),
-            });
-            control.element.style.gridColumn = item.column;
-            control.element.style.gridRow = '2';
-            body.appendChild(control.element);
-            register(item.id, control);
         }
-        return group;
+        container.appendChild(row);
+    }
+
+    let selectedPage = 0;
+
+    function buildSide() {
+        const side = document.getElementById('side');
+        side.textContent = '';
+        const pages = PAGES.map((page) => {
+            const panel = document.createElement('div');
+            panel.className = 'page';
+            panel.setAttribute('role', 'tabpanel');
+            panel.setAttribute('aria-label', page.name);
+            if (page.rows) {
+                buildKnobPage(page, panel);
+            } else {
+                buildSliderPage(page, panel);
+            }
+            return panel;
+        });
+        const show = (index) => {
+            selectedPage = index;
+            pages.forEach((panel, i) => {
+                panel.hidden = i !== index;
+            });
+        };
+        const selector = tabs(PAGES.map((page) => page.name), {
+            selected: selectedPage,
+            label: 'Control pages',
+            onSelect: show,
+        });
+        side.append(selector.element, ...pages);
+        show(selectedPage);
     }
 
     function stripGroup(...children) {
@@ -281,23 +348,7 @@
         }
         shapeNames = descriptor.shapes || [];
 
-        const core = document.getElementById('core');
-        core.textContent = '';
-        for (const rowSpec of CORE) {
-            const row = document.createElement('div');
-            row.className = 'core-row';
-            for (const spec of rowSpec) {
-                row.appendChild(buildGroup(spec, CORE_KNOB, CORE_COLUMN));
-            }
-            core.appendChild(row);
-        }
-
-        const rack = document.getElementById('rack');
-        rack.textContent = '';
-        for (const spec of RACK) {
-            rack.appendChild(buildGroup(spec, RACK_KNOB, RACK_COLUMN));
-        }
-
+        buildSide();
         buildStrip();
         built = true;
         refresh();
@@ -311,18 +362,28 @@
         }
     }
 
+    function setHidden(identifier, hidden) {
+        for (const control of controls.get(identifier) || []) {
+            control.element.hidden = hidden;
+        }
+    }
+
     function refresh() {
         if (!built) {
             return;
         }
         const v = values;
-        setDim('dsRate', Math.round(v.dsMode) !== 1);
-        setDim('dsAmount', Math.round(v.dsMode) !== 2);
+        // One DOWNSAMPLE knob: the S&H rate in kHz mode, the amount in % mode.
+        const downsampleMode = Math.round(v.dsMode);
+        setHidden('dsRate', downsampleMode === 2);
+        setHidden('dsAmount', downsampleMode !== 2);
+        setDim('dsRate', downsampleMode === 0);
         setDim('cleanupMultiple', v.cleanupMode < 0.5);
         setDim('foldPosition', v.foldAmount <= 0);
         setDim('glideMode', v.glideTime <= 0);
         setDim('subShape', v.subLevel <= 0);
         setDim('subOctave', v.subLevel <= 0);
+        setDim('subCrossover', v.subLevel <= 0);   // with no sub there's nothing to split
 
         const free = v.envTimeMode >= 0.5;
         document.getElementById('time-sync').hidden = free;
@@ -406,13 +467,12 @@
                 '..#.#.#.#.#..',
             ],
         };
-        // Kept to open panel: behind titles and knob names they'd hurt legibility.
+        // Kept to open panel: behind knob names they'd hurt legibility.
         const placements = [
             ['square', 392, -62, 10],
-            ['mean', 668, -74, 10],
-            ['mean', -34, 440, 11],
-            ['square', 452, 488, 9],
-            ['checker', 812, 470, 12],
+            ['mean', 668, -78, 10],
+            ['checker', 912, 150, 10],
+            ['mean', -58, 300, 11],
         ];
         const layer = document.getElementById('skulls');
         for (const [kind, x, y, size] of placements) {

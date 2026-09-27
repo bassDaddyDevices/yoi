@@ -1,8 +1,8 @@
 /* yoi.css
    YOI's funky 8-bit look, after the concept mock-up: a cyan panel with grey pixel skulls, a
    black screen with a bright yellow line, and chunky coloured knobs with thick black rims.
-   The .knob, .switch, .readout and .menu rules style the shared bdd-controls.js parts; a new
-   synth copies them and changes the colours. */
+   The .knob, .slider, .tabs, .switch, .readout and .menu rules style the shared bdd-controls.js
+   parts; a new synth copies them and changes the colours. */
 
 :root {
     --panel: #72cedc;          /* the mock-up's cyan */
@@ -61,7 +61,7 @@ button {
     left: 0;
     top: 0;
     width: 940px;
-    height: 600px;
+    height: 410px;
     transform-origin: 0 0;
     overflow: hidden;
     background-color: var(--panel);
@@ -69,7 +69,7 @@ button {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.09 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
     display: grid;
     grid-template-columns: 520px 1fr;
-    grid-template-rows: 40px 336px 1fr;
+    grid-template-rows: 40px 336px;
     column-gap: 20px;
     row-gap: 10px;
     padding: 12px 16px 12px;
@@ -86,7 +86,7 @@ button {
     position: absolute;
 }
 
-.top, .screen, .core, .rack {
+.top, .screen, .side {
     position: relative;   /* above the skulls */
 }
 
@@ -250,49 +250,177 @@ button {
     color: var(--screen-line);
 }
 
-/* MARK: Clusters of knobs */
+/* MARK: Pages beside the screen */
 
-.core {
+.side {
     grid-row: 2;
     grid-column: 2;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    gap: 14px;
 }
 
-.rack {
-    grid-row: 3;
-    grid-column: 1 / -1;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding-top: 12px;
-}
-
-.group {
+.page {
+    flex: 1;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 6px;
+    justify-content: center;
 }
 
-.group-title {
-    color: var(--ink);
-    line-height: 0;
-    padding: 0 2px 2px;
-    filter: drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 1px var(--halo));
-}
-
-.group-body {
+.page-grid {
     display: grid;
-    grid-auto-flow: row;
+    grid-template-rows: auto auto auto auto;
     row-gap: 6px;
     justify-items: center;
 }
 
-.core-row {
+.page-cell {
     display: flex;
-    align-items: flex-start;
+    justify-content: center;
+}
+
+.page-grid .switch {
+    margin-bottom: 8px;
+}
+
+.page-sliders {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 6px 0 2px;
+}
+
+.slider-group {
+    display: flex;
+    gap: 8px;
+}
+
+/* MARK: Tabs (bdd-controls tabs), like Max's live.tab */
+
+.tabs {
+    flex: none;
+    display: flex;
+    border: 3px solid var(--ink);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #bdeaf1;
+    box-shadow: 3px 4px 0 rgba(0, 0, 0, 0.22);
+}
+
+.tab {
+    flex: 1;
+    border: 0;
+    background: none;
+    padding: 6px 0;
+    line-height: 0;
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.tab + .tab {
+    border-left: 3px solid var(--ink);
+}
+
+.tab:hover {
+    background: #d9f4f8;
+}
+
+.tab.selected {
+    background: var(--screen);
+    color: var(--screen-line);
+}
+
+.tab:focus-visible {
+    outline: 2px dashed var(--ink);
+    outline-offset: -5px;
+}
+
+.tab.selected:focus-visible {
+    outline-color: var(--screen-line);
+}
+
+/* MARK: Sliders (bdd-controls slider) */
+
+.slider {
+    --slider-color: var(--purple);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 58px;
+    cursor: ns-resize;
+    outline: none;
+    touch-action: none;
+    transition: opacity 120ms;
+}
+
+.slider-label {
+    font: 800 10px/1 var(--sans);
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    text-shadow: 0 0 2px var(--halo), 0 0 2px var(--halo);
+    white-space: nowrap;
+}
+
+.slider-track {
+    position: relative;
+    width: 26px;
+    border: 3px solid var(--ink);
+    border-radius: 9px;
+    background: var(--screen);
+    box-shadow: 2px 3px 0 rgba(0, 0, 0, 0.22);
+    box-sizing: content-box;
+}
+
+.slider-fill {
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    bottom: 0;
+    border-radius: 4px 4px 6px 6px;
+    background: var(--slider-color);
+    opacity: 0.55;
+}
+
+.slider-cap {
+    position: absolute;
+    left: -8px;
+    right: -8px;
+    border: 3px solid var(--ink);
+    border-radius: 6px;
+    background: var(--slider-color);
+    box-sizing: border-box;
+}
+
+.slider-cap::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    top: 50%;
+    height: 2px;
+    margin-top: -1px;
+    background: var(--ink);
+}
+
+.slider:hover .slider-cap, .slider.held .slider-cap {
+    filter: brightness(1.08) saturate(1.1);
+}
+
+.slider:focus-visible .slider-track {
+    outline: 2px dashed var(--ink);
+    outline-offset: 4px;
+}
+
+.slider-value {
+    font: 700 10.5px/1 var(--mono);
+    color: var(--screen-line);
+    background: var(--ink);
+    border-radius: 5px;
+    padding: 3px 4px;
+    min-width: 56px;
+    text-align: center;
+    white-space: nowrap;
 }
 
 /* MARK: Knobs (bdd-controls knob) */
