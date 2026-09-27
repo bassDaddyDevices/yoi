@@ -31,6 +31,7 @@
 #include "YoiFactoryShapes.hpp"
 #include "Shared/BDDAtomics.hpp"
 #include "Shared/BDDDrawnCurve.hpp"
+#include "Shared/BDDDownsamplers.hpp"
 #include "Shared/BDDDrawnEnvelope.hpp"
 #include "Shared/BDDEnvelopes.hpp"
 #include "Shared/BDDFilters.hpp"
@@ -46,14 +47,15 @@
      held keys -> newest key -> glide + pitch bend -> pitch
      pitch -> main oscillator (saw <-> square) ----------------------------+
            -> sub oscillator (sine <-> triangle, one or two octaves down) --+-> mix
-     mix -> state-variable filter (low-pass or band-pass) -> amp envelope
-         -> output level -> soft limiter -> every output channel
+     mix -> state-variable filter (low-pass or band-pass) -> downsampler (S&H or Downsample)
+         -> amp envelope -> output level -> soft limiter -> every output channel
 
      drawn envelope: clock (Sync to the host, or Free) -> direction -> read the drawing (0...1)
          -> filter cutoff = CUTOFF lowered by Amount x (1 - drawing), in octaves
 
- Later stages add the wavefolder, downsampler and clean-up filter (stage 3) and the vowel filter
- (stage 4).
+ The downsampler sits straight after the resonant filter on purpose: it folds the filter's
+ resonant peak back down into throaty, vocal tones, which is where YOI gets its sound. Later
+ stages add the wavefolder and clean-up filter, and the vowel filter.
 
  Parameters only ever store their new target here, from whichever thread sets them. Anything
  derived from them (envelope coefficients, smoothed values) is recalculated on the render thread,
@@ -87,6 +89,8 @@ public:
                                 &mAccelEndSmoother, &mAccelCurveSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
+        mSampleHoldWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
+        mDownsampleWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mBendSmoother.setTimeConstant(kBendSmoothingSeconds, inSampleRate);
         snapSmoothers();
 
@@ -96,6 +100,8 @@ public:
         mMainOscillator.reset();
         mSubOscillator.reset();
         mFilter.reset();
+        mSampleAndHold.reset();
+        mSampleCountDownsampler.reset();
 
         mEnvelopeClock = bdd::EnvelopeClock();
         mCurveFade = 1.0f;
@@ -190,6 +196,15 @@ public:
             case YoiExtensionParameterAddress::accelCurve:
                 mAccelCurve = std::clamp(value, -1.0f, 1.0f);
                 break;
+            case YoiExtensionParameterAddress::dsMode:
+                mDownsampleMode = std::clamp(int(std::lround(value)), 0, 2);
+                break;
+            case YoiExtensionParameterAddress::dsRate:
+                mSampleHoldRate = std::clamp(value, 200.0f, 12000.0f);
+                break;
+            case YoiExtensionParameterAddress::dsAmount:
+                mDownsampleAmount = std::clamp(value, 0.0f, 100.0f);
+                break;
         }
     }
 
@@ -220,6 +235,9 @@ public:
             case YoiExtensionParameterAddress::accelStart: return mAccelStart;
             case YoiExtensionParameterAddress::accelEnd: return mAccelEnd;
             case YoiExtensionParameterAddress::accelCurve: return mAccelCurve;
+            case YoiExtensionParameterAddress::dsMode: return AUValue(mDownsampleMode);
+            case YoiExtensionParameterAddress::dsRate: return mSampleHoldRate;
+            case YoiExtensionParameterAddress::dsAmount: return mDownsampleAmount;
             default: return 0.f;
         }
     }
@@ -242,6 +260,9 @@ public:
 
     /// Envelope time modes, as stored in the `envTimeMode` parameter.
     enum EnvelopeTimeMode : int { envelopeSync = 0, envelopeFree = 1 };
+
+    /// Downsampler modes, as stored in the `dsMode` parameter.
+    enum DownsampleMode : int { downsampleOff = 0, downsampleSampleHold = 1, downsampleCount = 2 };
 
     /// A key went down. Velocity is accepted for the future but does not shape the sound yet.
     void noteOn(int note, int velocity) {
@@ -467,6 +488,13 @@ public:
         const float outputTarget = bdd::decibelsToGain(mOutputDecibels);
         const float filterModeTarget = float(mFilterMode);
         const auto direction = bdd::EnvelopeDirection(mEnvDirection);
+        const float sampleHoldTarget = (mDownsampleMode == downsampleSampleHold) ? 1.0f : 0.0f;
+        const float downsampleTarget = (mDownsampleMode == downsampleCount) ? 1.0f : 0.0f;
+        const double sampleHoldRate = double(mSampleHoldRate);
+        // Amount 0-100 is a hold of 1-60 samples at 48 kHz, as in the Max device, scaled so
+        // the effective rate is the same at any sample rate.
+        const double downsampleFactor = std::max(1.0, double(mDownsampleAmount) * 0.6)
+                                      * (mSampleRate / kDownsampleReferenceRate);
 
         double drawingPosition = 0.0;
         float drawing = 0.0f;
@@ -512,10 +540,21 @@ public:
                                     bdd::StateVariableFilter::qForResonance(resonanceAmount),
                                     mSampleRate);
             const auto filtered = mFilter.process(mix);
-            const double voice = filtered.lowPass + (filtered.bandPass - filtered.lowPass) * double(bandPassAmount);
+            const float voice = float(filtered.lowPass + (filtered.bandPass - filtered.lowPass) * double(bandPassAmount));
+
+            // Downsampler, right after the filter. Both kinds always run, so switching between
+            // them (or off) crossfades instead of clicking.
+            const float sampleHoldAmount = mSampleHoldWeight.next(sampleHoldTarget);
+            const float downsampleAmount = mDownsampleWeight.next(downsampleTarget);
+            const float sampledAndHeld = mSampleAndHold.next(voice, sampleHoldRate, mSampleRate);
+            const float downsampled = mSampleCountDownsampler.next(voice, downsampleFactor);
+            // Weights that sum to 1, so a fully selected mode passes its output exactly (a held
+            // step stays perfectly flat) rather than rebuilding it from the unheld signal.
+            const float dryAmount = 1.0f - sampleHoldAmount - downsampleAmount;
+            const float gritty = dryAmount * voice + sampleHoldAmount * sampledAndHeld + downsampleAmount * downsampled;
 
             const double amp = mAmpEnvelope.next();
-            const float sample = bdd::softLimit(float(voice * amp) * outputGain);
+            const float sample = bdd::softLimit(float(double(gritty) * amp) * outputGain);
 
             for (auto* buffer : outputBuffers) {
                 buffer[frameIndex] = sample;
@@ -671,12 +710,18 @@ private:
     static constexpr double kSmoothingSeconds = 0.015;
     /// Pitch bend arrives in steps; this is just enough to hide them without feeling late.
     static constexpr double kBendSmoothingSeconds = 0.005;
+    /// Switching downsampler modes crossfades over this long.
+    static constexpr double kModeCrossfadeSeconds = 0.015;
     /// A redrawn envelope fades in over this long, so editing it while it plays never clicks.
     static constexpr double kCurveCrossfadeSeconds = 0.02;
     /// Scales the oscillator mix so that the default sound peaks around -7 dBFS (about -15 dBFS
     /// RMS). That leaves room for resonance, which can add 10 dB or more at a harmonic, before
     /// the limiter's knee at -4.4 dBFS, so the limiter only catches genuinely extreme settings.
     static constexpr double kOscillatorHeadroom = 0.25;
+    /// The sample rate the Downsample amount is counted at: the rate the owner's Live projects
+    /// (and so the Max device it was tuned in) run at. At any other rate the hold is scaled to
+    /// keep the same effective rate, so a Set sounds the same whatever its sample rate.
+    static constexpr double kDownsampleReferenceRate = 48000.0;
 
     void startNote(int note, bool legato) {
         const bool glides = mHasPlayed
@@ -695,6 +740,8 @@ private:
             if (!mAmpEnvelope.isActive()) {
                 mMainOscillator.reset();
                 mSubOscillator.reset();
+                mSampleAndHold.reset();
+                mSampleCountDownsampler.reset();
             }
             mAmpEnvelope.gateOn();
 
@@ -775,6 +822,8 @@ private:
         mAccelStartSmoother.snap(mAccelStart);
         mAccelEndSmoother.snap(mAccelEnd);
         mAccelCurveSmoother.snap(mAccelCurve);
+        mSampleHoldWeight.snap(mDownsampleMode == downsampleSampleHold ? 1.0f : 0.0f);
+        mDownsampleWeight.snap(mDownsampleMode == downsampleCount ? 1.0f : 0.0f);
     }
 
     // MARK: - Member Variables
@@ -812,6 +861,9 @@ private:
     float mAccelStart = 0.25f;
     float mAccelEnd = 2.0f;
     float mAccelCurve = 0.0f;
+    int mDownsampleMode = downsampleSampleHold;
+    float mSampleHoldRate = 1400.0f;
+    float mDownsampleAmount = 45.0f;
 
     float mBendPosition = 0.0f;
 
@@ -833,6 +885,8 @@ private:
     bdd::Smoother mAccelStartSmoother;
     bdd::Smoother mAccelEndSmoother;
     bdd::Smoother mAccelCurveSmoother;
+    bdd::LinearRamp mSampleHoldWeight;
+    bdd::LinearRamp mDownsampleWeight;
 
     bdd::NoteStack mHeldNotes;
     bdd::Glide mGlide;
@@ -842,6 +896,8 @@ private:
     bdd::SubOscillator mSubOscillator;
     bdd::StateVariableFilter mFilter;
     bdd::ADSREnvelope mAmpEnvelope;
+    bdd::SampleAndHold mSampleAndHold;
+    bdd::SampleCountDownsampler mSampleCountDownsampler;
 
     // Host timing, as last reported.
     double mHostTempo = 120.0;

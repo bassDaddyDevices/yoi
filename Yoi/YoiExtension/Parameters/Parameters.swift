@@ -231,6 +231,34 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             defaultValue: 0.0
         )
     }
+    ParameterGroupSpec(identifier: "grit", name: "Grit") {
+        ParameterSpec(
+            address: .dsMode,
+            identifier: "dsMode",
+            name: "Downsampler",
+            units: .indexed,
+            valueRange: 0...2,
+            defaultValue: 1,
+            valueStrings: ["Off", "S&H", "Downsample"]
+        )
+        ParameterSpec(
+            address: .dsRate,
+            identifier: "dsRate",
+            name: "S&H Rate",
+            units: .hertz,
+            valueRange: 200.0...12000.0,
+            defaultValue: 1400.0,
+            flags: logarithmic
+        )
+        ParameterSpec(
+            address: .dsAmount,
+            identifier: "dsAmount",
+            name: "Downsample Amount",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 45.0
+        )
+    }
 }
 
 /// Option names come from the kernel, so the host and the DSP always agree on them.

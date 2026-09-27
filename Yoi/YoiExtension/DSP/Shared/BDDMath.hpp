@@ -61,6 +61,28 @@ struct Smoother {
     }
 };
 
+/// Moves in a straight line to its target over a fixed time, landing exactly. For crossfades,
+/// where a one-pole smoother would take many times longer to settle completely.
+struct LinearRamp {
+    float current = 0.0f;
+    float step = 0.001f;
+
+    void setDuration(double seconds, double sampleRate) {
+        step = float(1.0 / std::max(1.0, seconds * sampleRate));
+    }
+
+    void snap(float value) { current = value; }
+
+    inline float next(float target) {
+        if (current < target) {
+            current = std::min(target, current + step);
+        } else if (current > target) {
+            current = std::max(target, current - step);
+        }
+        return current;
+    }
+};
+
 /// Output safety stage. Leaves the signal untouched up to the knee (about -4.4 dBFS), then
 /// bends it smoothly towards ±1 so that nothing, not even a screaming resonance, can leave the
 /// plug-in above full scale. The curve's slope is continuous at the knee, so crossing it adds

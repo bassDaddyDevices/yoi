@@ -40,13 +40,17 @@ constexpr double kPi = 3.14159265358979323846;
 
 using Kernel = YoiExtensionDSPKernel;
 
-/// A kernel prepared the way the audio unit prepares one. Unless `withEnvelope` is set, the drawn
-/// envelope's Amount is 0, so the voice tests hear the filter exactly where CUTOFF puts it.
-std::unique_ptr<Kernel> makeKernel(double sampleRate = kSampleRate, bool withEnvelope = false) {
+/// A kernel prepared the way the audio unit prepares one. Unless asked for, the drawn envelope
+/// (Amount 0) and the downsampler (Off) are taken out, so each test hears only what it is testing.
+std::unique_ptr<Kernel> makeKernel(double sampleRate = kSampleRate, bool withEnvelope = false,
+                                   bool withDownsampler = false) {
     auto kernel = std::make_unique<Kernel>();
     kernel->initialize(2, sampleRate);
     if (!withEnvelope) {
         kernel->setParameter(envAmount, 0.0f);
+    }
+    if (!withDownsampler) {
+        kernel->setParameter(dsMode, 0.0f);
     }
     return kernel;
 }
@@ -158,8 +162,9 @@ void setUpForPitch(Kernel& kernel, double note) {
 // MARK: - Parameters
 
 void testDefaultsMatchParameterTree() {
-    // The same values Parameters.swift gives hosts.
-    auto kernel = makeKernel(kSampleRate, true);
+    // The same values Parameters.swift gives hosts, on an untouched kernel.
+    auto kernel = std::make_unique<Kernel>();
+    kernel->initialize(2, kSampleRate);
     struct Expected { AUParameterAddress address; float value; };
     const Expected expected[] = {
         { outputLevel, 0.0f }, { glideTime, 60.0f }, { glideMode, 0.0f }, { bendRange, 2.0f },
@@ -168,7 +173,7 @@ void testDefaultsMatchParameterTree() {
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
-        { accelCurve, 0.0f },
+        { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 45.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -187,7 +192,7 @@ void testParametersRoundTrip() {
         { ampAttack, 20.0f }, { ampDecay, 900.0f }, { ampSustain, 40.0f }, { ampRelease, 700.0f },
         { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
-        { accelCurve, -0.4f },
+        { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -734,7 +739,7 @@ void testFactoryShapes() {
 }
 
 void testEnvelopeExtremesStayBounded() {
-    auto kernel = makeKernel(kSampleRate, true);
+    auto kernel = makeKernel(kSampleRate, true, true);
     kernel->setParameter(outputLevel, 6.0f);
     kernel->setParameter(resonance, 100.0f);
     kernel->setParameter(cutoff, 20000.0f);
@@ -756,6 +761,182 @@ void testEnvelopeExtremesStayBounded() {
     }
     CHECK(highest <= 1.0f, "fast, deep envelope left full scale: peak %f", highest);
     CHECK(finite, "fast, deep envelope produced a non-finite sample");
+}
+
+// MARK: - Downsampler
+
+/// Lengths of the runs of identical samples between `from` and `to`, leaving out the first and
+/// last runs, which may be cut short by the window.
+std::vector<int> holdRuns(const std::vector<float>& samples, size_t from, size_t to) {
+    std::vector<int> runs;
+    int length = 1;
+    for (size_t index = from + 1; index < to && index < samples.size(); ++index) {
+        if (samples[index] == samples[index - 1]) {
+            ++length;
+        } else {
+            runs.push_back(length);
+            length = 1;
+        }
+    }
+    if (!runs.empty()) {
+        runs.erase(runs.begin());
+    }
+    return runs;
+}
+
+double averageOf(const std::vector<int>& values) {
+    double sum = 0.0;
+    for (int value : values) {
+        sum += value;
+    }
+    return values.empty() ? 0.0 : sum / double(values.size());
+}
+
+void testSampleAndHold() {
+    for (double rate : { 48000.0, 96000.0 }) {
+        bdd::SampleAndHold hold;
+        std::vector<float> output(48000);
+        bool grabsInput = true;
+        for (size_t index = 0; index < output.size(); ++index) {
+            output[index] = hold.next(float(index), 1400.0, rate);
+            if (index > 0 && output[index] != output[index - 1]) {
+                grabsInput = grabsInput && output[index] == float(index);
+            }
+        }
+        const auto runs = holdRuns(output, 0, output.size());
+        const double expected = rate / 1400.0;
+        const int shortest = *std::min_element(runs.begin(), runs.end());
+        const int longest = *std::max_element(runs.begin(), runs.end());
+        CHECK(std::fabs(averageOf(runs) - expected) < 0.01, "S&H at 1400 Hz and %.0f Hz holds for %f samples on average, expected %f",
+              rate, averageOf(runs), expected);
+        CHECK(shortest == int(expected) && longest == int(expected) + 1, "S&H holds should alternate %d and %d samples, got %d to %d",
+              int(expected), int(expected) + 1, shortest, longest);
+        CHECK(grabsInput, "S&H should hold the input sample it grabbed");
+    }
+}
+
+void testSampleCountDownsampler() {
+    auto runsFor = [](double factor) {
+        bdd::SampleCountDownsampler downsampler;
+        std::vector<float> output(20000);
+        for (size_t index = 0; index < output.size(); ++index) {
+            output[index] = downsampler.next(float(index), factor);
+        }
+        return std::make_pair(output, holdRuns(output, 0, output.size()));
+    };
+
+    const auto whole = runsFor(27.0).second;
+    CHECK(*std::min_element(whole.begin(), whole.end()) == 27 && *std::max_element(whole.begin(), whole.end()) == 27,
+          "a factor of 27 should hold exactly 27 samples");
+
+    const auto fractional = runsFor(29.3878).second;
+    CHECK(std::fabs(averageOf(fractional) - 29.3878) < 0.01, "a factor of 29.39 holds for %f on average", averageOf(fractional));
+    CHECK(*std::min_element(fractional.begin(), fractional.end()) == 29 && *std::max_element(fractional.begin(), fractional.end()) == 30,
+          "a fractional factor should alternate between the two nearest hold lengths");
+
+    const auto [transparent, none] = runsFor(1.0);
+    bool unchanged = true;
+    for (size_t index = 0; index < transparent.size(); ++index) {
+        unchanged = unchanged && transparent[index] == float(index);
+    }
+    CHECK(unchanged, "a factor of 1 should pass the input straight through");
+
+    bdd::SampleCountDownsampler shortened;
+    for (int index = 0; index < 30; ++index) {
+        shortened.next(float(index), 60.0);
+    }
+    const float before = shortened.next(100.0f, 4.0);
+    int wait = 1;
+    while (shortened.next(float(200 + wait), 4.0) == before && wait < 100) {
+        ++wait;
+    }
+    CHECK(wait <= 4, "shortening the hold mid-way should take effect at once, but took %d samples", wait);
+}
+
+/// A held note through the full voice with the downsampler set to `mode`, after the attack.
+std::vector<float> playThroughDownsampler(float mode, double sampleRate = kSampleRate) {
+    auto kernel = makeKernel(sampleRate, false, true);
+    kernel->setParameter(dsMode, mode);
+    kernel->noteOn(40, 100);
+    return render(*kernel, frames(0.5, sampleRate));
+}
+
+void testDownsamplerInTheVoice() {
+    const auto off = playThroughDownsampler(0.0f);
+    const auto offRuns = holdRuns(off, frames(0.1), off.size());
+    CHECK(*std::max_element(offRuns.begin(), offRuns.end()) <= 2, "with the downsampler off the voice should not step");
+
+    const auto sampleHold = playThroughDownsampler(1.0f);
+    const auto sampleHoldRuns = holdRuns(sampleHold, frames(0.1), sampleHold.size());
+    CHECK(std::fabs(averageOf(sampleHoldRuns) - kSampleRate / 1400.0) < 0.05, "S&H in the voice holds for %f samples, expected %f",
+          averageOf(sampleHoldRuns), kSampleRate / 1400.0);
+
+    // Downsample amount 45 is a 27-sample hold at 48 kHz, as in the Max device in the owner's
+    // projects, and the same effective rate (so fewer or more samples) at 44.1 and 96 kHz.
+    const auto at48 = playThroughDownsampler(2.0f, 48000.0);
+    const auto runs48 = holdRuns(at48, frames(0.1), at48.size());
+    CHECK(*std::min_element(runs48.begin(), runs48.end()) == 27 && *std::max_element(runs48.begin(), runs48.end()) == 27,
+          "Downsample at amount 45 and 48 kHz should hold exactly 27 samples");
+    for (double rate : { 44100.0, 96000.0 }) {
+        const auto other = playThroughDownsampler(2.0f, rate);
+        const auto runs = holdRuns(other, frames(0.1, rate), other.size());
+        const double expected = 27.0 * rate / 48000.0;
+        CHECK(std::fabs(averageOf(runs) - expected) < 0.05, "Downsample at %.0f Hz holds for %f, expected %f (the same rate as 27 at 48 kHz)",
+              rate, averageOf(runs), expected);
+    }
+}
+
+void testDownsamplerComesAfterTheFilter() {
+    // A low cutoff leaves almost nothing above a few hundred hertz. If the downsampler runs after
+    // the filter, its images of what remains come back in well above the cutoff; if it ran before,
+    // the filter would take them out again.
+    auto play = [](float mode) {
+        auto kernel = makeKernel(kSampleRate, false, true);
+        kernel->setParameter(dsMode, mode);
+        kernel->setParameter(cutoff, 150.0f);
+        kernel->setParameter(resonance, 60.0f);
+        kernel->noteOn(40, 100);
+        return render(*kernel, frames(0.5));
+    };
+    const auto off = play(0.0f);
+    const auto sampleHold = play(1.0f);
+    CHECK(brightness(sampleHold, frames(0.1)) > brightness(off, frames(0.1)) * 3.0,
+          "the downsampler should add energy above the filter: brightness %f against %f",
+          brightness(sampleHold, frames(0.1)), brightness(off, frames(0.1)));
+}
+
+void testDownsamplerModeSwitchSettles() {
+    auto kernel = makeKernel(kSampleRate, false, true);
+    kernel->setParameter(dsMode, 0.0f);
+    kernel->noteOn(40, 100);
+    render(*kernel, frames(0.2));
+    kernel->setParameter(dsMode, 1.0f);
+    const auto switching = render(*kernel, frames(0.2));
+    const auto early = holdRuns(switching, 0, frames(0.005));
+    const auto settled = holdRuns(switching, frames(0.1), switching.size());
+    CHECK(early.empty() || *std::max_element(early.begin(), early.end()) <= 2, "switching modes should fade in, not jump");
+    CHECK(std::fabs(averageOf(settled) - kSampleRate / 1400.0) < 0.05, "after the fade, S&H should be fully in: %f", averageOf(settled));
+}
+
+void testDownsamplerExtremesStayBounded() {
+    float highest = 0.0f;
+    bool finite = true;
+    for (float mode : { 1.0f, 2.0f }) {
+        for (float setting : { 0.0f, 1.0f }) {
+            auto kernel = makeKernel(kSampleRate, true, true);
+            kernel->setParameter(dsMode, mode);
+            kernel->setParameter(dsRate, setting == 0.0f ? 200.0f : 12000.0f);
+            kernel->setParameter(dsAmount, setting == 0.0f ? 100.0f : 0.0f);
+            kernel->setParameter(resonance, 100.0f);
+            kernel->setParameter(outputLevel, 6.0f);
+            kernel->noteOn(28, 127);
+            const auto output = render(*kernel, frames(0.3));
+            highest = std::max(highest, peak(output));
+            finite = finite && allFinite(output);
+        }
+    }
+    CHECK(highest <= 1.0f, "downsampler extremes left full scale: peak %f", highest);
+    CHECK(finite, "downsampler extremes produced a non-finite sample");
 }
 
 } // namespace
@@ -789,6 +970,12 @@ int main() {
     testRedrawingCrossfades();
     testFactoryShapes();
     testEnvelopeExtremesStayBounded();
+    testSampleAndHold();
+    testSampleCountDownsampler();
+    testDownsamplerInTheVoice();
+    testDownsamplerComesAfterTheFilter();
+    testDownsamplerModeSwitchSettles();
+    testDownsamplerExtremesStayBounded();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

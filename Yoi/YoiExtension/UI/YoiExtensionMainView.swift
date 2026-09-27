@@ -36,6 +36,11 @@ struct YoiExtensionMainView: View {
                     ParameterSlider(param: parameterTree.envelope.accelEnd, logarithmic: true)
                     ParameterSlider(param: parameterTree.envelope.accelCurve)
                 }
+                section("Downsampler") {
+                    ParameterPicker(param: parameterTree.grit.dsMode, options: ["Off", "S&H", "Downsample"])
+                    ParameterSlider(param: parameterTree.grit.dsRate, logarithmic: true)
+                    ParameterSlider(param: parameterTree.grit.dsAmount)
+                }
                 section("Oscillators") {
                     ParameterSlider(param: parameterTree.oscillators.oscShape)
                     ParameterSlider(param: parameterTree.oscillators.subLevel)
