@@ -14,7 +14,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <array>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -38,9 +40,14 @@ constexpr double kPi = 3.14159265358979323846;
 
 using Kernel = YoiExtensionDSPKernel;
 
-std::unique_ptr<Kernel> makeKernel(double sampleRate = kSampleRate) {
+/// A kernel prepared the way the audio unit prepares one. Unless `withEnvelope` is set, the drawn
+/// envelope's Amount is 0, so the voice tests hear the filter exactly where CUTOFF puts it.
+std::unique_ptr<Kernel> makeKernel(double sampleRate = kSampleRate, bool withEnvelope = false) {
     auto kernel = std::make_unique<Kernel>();
     kernel->initialize(2, sampleRate);
+    if (!withEnvelope) {
+        kernel->setParameter(envAmount, 0.0f);
+    }
     return kernel;
 }
 
@@ -49,8 +56,10 @@ int frames(double seconds, double sampleRate = kSampleRate) {
 }
 
 /// Renders in host-sized blocks and returns the first channel. Fails the run if any channel
-/// differs from the first, since the voice is mono.
-std::vector<float> render(Kernel& kernel, int frameCount, int channels = 2, int block = 256) {
+/// differs from the first, since the voice is mono. `sampleTime`, when given, is the running
+/// sample count the host would pass, and is advanced.
+std::vector<float> render(Kernel& kernel, int frameCount, int channels = 2, int block = 256,
+                          int64_t* sampleTime = nullptr) {
     std::vector<float> output;
     output.reserve(size_t(frameCount));
     std::vector<std::vector<float>> buffers(static_cast<size_t>(channels), std::vector<float>(static_cast<size_t>(block)));
@@ -62,7 +71,11 @@ std::vector<float> render(Kernel& kernel, int frameCount, int channels = 2, int 
     bool channelsMatch = true;
     for (int start = 0; start < frameCount; start += block) {
         const int count = std::min(block, frameCount - start);
-        kernel.process(std::span<float*>(pointers.data(), pointers.size()), 0, uint32_t(count));
+        const int64_t now = (sampleTime != nullptr) ? *sampleTime : 0;
+        kernel.process(std::span<float*>(pointers.data(), pointers.size()), now, uint32_t(count));
+        if (sampleTime != nullptr) {
+            *sampleTime += count;
+        }
         for (int channel = 1; channel < channels; ++channel) {
             channelsMatch = channelsMatch && std::equal(buffers[0].begin(), buffers[0].begin() + count,
                                                         buffers[size_t(channel)].begin());
@@ -146,13 +159,16 @@ void setUpForPitch(Kernel& kernel, double note) {
 
 void testDefaultsMatchParameterTree() {
     // The same values Parameters.swift gives hosts.
-    auto kernel = makeKernel();
+    auto kernel = makeKernel(kSampleRate, true);
     struct Expected { AUParameterAddress address; float value; };
     const Expected expected[] = {
         { outputLevel, 0.0f }, { glideTime, 60.0f }, { glideMode, 0.0f }, { bendRange, 2.0f },
         { oscShape, 0.0f }, { subLevel, 50.0f }, { subShape, 0.0f }, { subOctave, 0.0f },
         { filterMode, 0.0f }, { cutoff, 800.0f }, { resonance, 30.0f },
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
+        { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
+        { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
+        { accelCurve, 0.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -169,6 +185,9 @@ void testParametersRoundTrip() {
         { oscShape, 40.0f }, { subLevel, 75.0f }, { subShape, 60.0f }, { subOctave, 1.0f },
         { filterMode, 1.0f }, { cutoff, 1234.0f }, { resonance, 85.0f },
         { ampAttack, 20.0f }, { ampDecay, 900.0f }, { ampSustain, 40.0f }, { ampRelease, 700.0f },
+        { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
+        { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
+        { accelCurve, -0.4f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -424,6 +443,321 @@ void testMonoOutput() {
     CHECK(rms(output, frames(0.1)) > 0.05, "mono output is too quiet: %f RMS", rms(output, frames(0.1)));
 }
 
+// MARK: - Drawn curve
+
+std::vector<float> renderTable(std::vector<bdd::CurvePoint> points) {
+    std::array<bdd::CurvePoint, bdd::kMaxCurvePoints> clean{};
+    const int count = bdd::sanitizeCurve(points.data(), int(points.size()), clean.data());
+    std::vector<float> table(static_cast<size_t>(bdd::kCurveTableSize));
+    bdd::renderCurveTable(clean.data(), count, table.data(), int(table.size()));
+    return table;
+}
+
+void testCurveRendering() {
+    const auto straight = renderTable({ { 0, 0, 0 }, { 1, 1, 0 } });
+    CHECK(std::fabs(straight[512] - 0.5f) < 1e-6f, "straight line midpoint is %f", straight[512]);
+    CHECK(straight[0] == 0.0f && straight[1024] == 1.0f, "straight line ends are %f and %f", straight[0], straight[1024]);
+    CHECK(std::fabs(bdd::lookup(straight.data(), bdd::kCurveTableSize, 0.3) - 0.3f) < 1e-5f, "lookup does not interpolate");
+
+    const auto slowStart = renderTable({ { 0, 0, 0.5f }, { 1, 1, 0 } });
+    const auto fastStart = renderTable({ { 0, 0, -0.5f }, { 1, 1, 0 } });
+    CHECK(slowStart[512] < 0.4f, "positive bend should start slowly: midpoint %f", slowStart[512]);
+    CHECK(fastStart[512] > 0.6f, "negative bend should start fast: midpoint %f", fastStart[512]);
+    CHECK(slowStart[1024] == 1.0f && fastStart[1024] == 1.0f, "bent segments must still reach their end point");
+
+    const auto gate = renderTable({ { 0, 1, 0 }, { 0.5f, 1, 0 }, { 0.5f, 0, 0 }, { 1, 0, 0 } });
+    CHECK(gate[511] == 1.0f && gate[512] == 0.0f, "a vertical jump should land exactly at its x: %f, %f", gate[511], gate[512]);
+}
+
+void testCurveSanitising() {
+    std::array<bdd::CurvePoint, bdd::kMaxCurvePoints> out{};
+
+    bdd::CurvePoint messy[] = { { 0.8f, 2.0f, 0.0f }, { 0.2f, -1.0f, 5.0f }, { 0.5f, 0.5f, 0.0f } };
+    int count = bdd::sanitizeCurve(messy, 3, out.data());
+    CHECK(count == 3, "kept %d of 3 points", count);
+    CHECK(out[0].x == 0.0f && out[1].x == 0.5f && out[2].x == 1.0f, "not sorted and pinned: %f %f %f", out[0].x, out[1].x, out[2].x);
+    CHECK(out[0].y == 0.0f && out[2].y == 1.0f, "heights not clamped: %f, %f", out[0].y, out[2].y);
+    CHECK(out[0].bend == 1.0f, "bend not clamped: %f", out[0].bend);
+
+    const float missing = std::nanf("");
+    bdd::CurvePoint withNaN[] = { { 0, 0, 0 }, { missing, 0.5f, 0 }, { 1, 1, 0 } };
+    CHECK(bdd::sanitizeCurve(withNaN, 3, out.data()) == 2, "a non-finite point was kept");
+
+    bdd::CurvePoint single[] = { { 0.3f, 0.7f, 0.0f } };
+    count = bdd::sanitizeCurve(single, 1, out.data());
+    CHECK(count == 2 && out[0].y == 0.7f && out[1].y == 0.7f, "one point should become a flat line at its height");
+    count = bdd::sanitizeCurve(nullptr, 5, out.data());
+    CHECK(count == 2 && out[0].y == 0.5f, "no points should become a flat line at half height");
+
+    std::vector<bdd::CurvePoint> many(200);
+    for (size_t i = 0; i < many.size(); ++i) {
+        many[i] = { float(i) / 199.0f, 0.5f, 0.0f };
+    }
+    CHECK(bdd::sanitizeCurve(many.data(), 200, out.data()) == bdd::kMaxCurvePoints, "point count not capped");
+}
+
+void testDirections() {
+    using D = bdd::EnvelopeDirection;
+    const bdd::AccelerateSettings defaults{};
+    auto read = [&](D direction, double phase, int64_t cycle = 3) {
+        return bdd::readPosition(direction, cycle, phase, 42, defaults);
+    };
+
+    CHECK(read(D::forward, 0.25) == 0.25, "forward");
+    CHECK(read(D::backward, 0.25) == 0.75, "backward");
+    CHECK(read(D::pingpong, 0.25) == 0.5 && read(D::pingpong, 0.5) == 1.0 && read(D::pingpong, 0.75) == 0.5,
+          "pingpong should reach the end halfway and come back");
+    CHECK(std::fabs(read(D::sine, 0.0)) < 1e-12 && std::fabs(read(D::sine, 0.5) - 1.0) < 1e-12,
+          "sine should start at the beginning and reach the end halfway");
+
+    CHECK(std::fabs(read(D::random, 1.0, 3) - read(D::random, 0.0, 4)) < 1e-12, "random jumps between passes");
+    double lowest = 1.0;
+    double highest = 0.0;
+    for (int64_t cycle = 0; cycle < 100; ++cycle) {
+        lowest = std::min(lowest, bdd::randomPoint(42, cycle));
+        highest = std::max(highest, bdd::randomPoint(42, cycle));
+    }
+    CHECK(lowest < 0.1 && highest > 0.9, "random points only cover %f to %f", lowest, highest);
+
+    const bdd::AccelerateSettings steady{ 1.0, 1.0, 0.0 };
+    CHECK(std::fabs(bdd::readPosition(D::accelerate, 0, 0.3, 42, steady) - 0.3) < 1e-12, "accelerate at 1x should read like forward");
+    CHECK(std::fabs(bdd::accelerateTravel(1.0, defaults) - 1.125) < 1e-12, "0.25x to 2x should travel 1.125 drawings per pass, got %f",
+          bdd::accelerateTravel(1.0, defaults));
+    CHECK(std::fabs(read(D::accelerate, 1.0 - 1e-12) - 0.125) < 1e-6, "accelerate should wrap round the drawing");
+    CHECK(bdd::accelerateTravel(0.5, defaults) < bdd::accelerateTravel(1.0, defaults) - bdd::accelerateTravel(0.5, defaults),
+          "accelerate should cover less ground in its first half than its second");
+    const bdd::AccelerateSettings bent{ 0.25, 2.0, 1.0 };
+    CHECK(bdd::accelerateTravel(0.5, bent) < bdd::accelerateTravel(0.5, defaults), "a positive curve should hold the speed down for longer");
+}
+
+void testSyncLengths() {
+    CHECK(Kernel::syncLengthCount() == 24, "%d sync lengths", Kernel::syncLengthCount());
+    CHECK(bdd::syncLengthInQuarterNotes(9, 4, 4) == 1.0, "1/4 should be one beat");
+    CHECK(bdd::syncLengthInQuarterNotes(15, 4, 4) == 4.0, "a bar of 4/4 should be four beats");
+    CHECK(bdd::syncLengthInQuarterNotes(15, 3, 4) == 3.0, "a bar of 3/4 should be three beats");
+    CHECK(bdd::syncLengthInQuarterNotes(15, 6, 8) == 3.0, "a bar of 6/8 should be three beats");
+    CHECK(bdd::syncLengthInQuarterNotes(6, 3, 4) == 0.5, "note values should not scale with the time signature");
+    CHECK(std::string(Kernel::syncLengthName(6)) == "1/8", "sync option 6 is %s", Kernel::syncLengthName(6));
+    CHECK(std::string(Kernel::directionName(5)) == "Accelerate", "direction 5 is %s", Kernel::directionName(5));
+}
+
+// MARK: - Envelope timing
+
+/// A kernel with the drawn envelope on, synced to sync option `syncIndex`.
+std::unique_ptr<Kernel> makeEnvelopeKernel(int syncIndex) {
+    auto kernel = makeKernel(kSampleRate, true);
+    kernel->setParameter(envSyncLength, float(syncIndex));
+    return kernel;
+}
+
+void testEnvelopeFollowsHostPosition() {
+    auto kernel = makeEnvelopeKernel(9);   // 1/4: one pass per beat
+    int64_t time = 0;
+    kernel->setHostTiming(120.0, 0.0, 0, true, 4, 4);
+    kernel->noteOn(40, 100);
+    render(*kernel, 12000, 2, 250, &time);   // 0.25 s: half a beat at 120 BPM
+    CHECK(std::fabs(kernel->envelopeDisplayPosition() - 0.5f) < 0.001f, "half a beat in, position is %f",
+          kernel->envelopeDisplayPosition());
+
+    // The host jumps (a loop, or the playhead moved): the envelope follows at once.
+    kernel->setHostTiming(120.0, 2.75, time, true, 4, 4);
+    render(*kernel, 250, 2, 250, &time);
+    const double expected = 0.75 + 249.0 / 24000.0;
+    CHECK(std::fabs(kernel->envelopeDisplayPosition() - expected) < 0.001, "after a jump to beat 2.75, position is %f, expected %f",
+          kernel->envelopeDisplayPosition(), expected);
+}
+
+void testEnvelopeRunsAtTempoWhenStopped() {
+    auto kernel = makeEnvelopeKernel(9);
+    kernel->setParameter(envRetrigger, 1.0f);   // start from the note, so the position is predictable
+    kernel->setHostTiming(90.0, 0.0, 0, false, 4, 4);
+    kernel->noteOn(40, 100);
+    render(*kernel, 12000, 2, 250);
+    const double expected = 11999.0 * (90.0 / 60.0 / kSampleRate);
+    CHECK(std::fabs(kernel->envelopeDisplayPosition() - expected) < 0.001, "at 90 BPM with the transport stopped, position is %f, expected %f",
+          kernel->envelopeDisplayPosition(), expected);
+}
+
+void testFreeTime() {
+    auto kernel = makeKernel(kSampleRate, true);
+    kernel->setParameter(envTimeMode, 1.0f);
+    kernel->setParameter(envFreeTime, 500.0f);
+    kernel->setParameter(envRetrigger, 1.0f);
+    kernel->noteOn(40, 100);
+    render(*kernel, 12000, 2, 250);
+    CHECK(std::fabs(kernel->envelopeDisplayPosition() - 0.5f) < 0.001f, "250 ms into a 500 ms envelope, position is %f",
+          kernel->envelopeDisplayPosition());
+}
+
+void testRetrigger() {
+    auto setUp = [](float retrigger) {
+        auto kernel = makeKernel(kSampleRate, true);
+        kernel->setParameter(envTimeMode, 1.0f);
+        kernel->setParameter(envFreeTime, 1000.0f);
+        kernel->setParameter(envRetrigger, retrigger);
+        kernel->noteOn(40, 100);
+        render(*kernel, 18000, 2, 250);   // 0.375 s in
+        return kernel;
+    };
+
+    {
+        auto kernel = setUp(1.0f);
+        kernel->noteOn(43, 100);   // overlapping
+        render(*kernel, 250, 2, 250);
+        CHECK(kernel->envelopeDisplayPosition() > 0.37f, "an overlapping note restarted the envelope: %f",
+              kernel->envelopeDisplayPosition());
+        kernel->noteOff(43);
+        kernel->noteOff(40);
+        render(*kernel, 250, 2, 250);
+        kernel->noteOn(45, 100);   // fresh
+        render(*kernel, 250, 2, 250);
+        CHECK(kernel->envelopeDisplayPosition() < 0.01f, "with Re-Trigger on, a fresh note should restart the drawing: %f",
+              kernel->envelopeDisplayPosition());
+    }
+    {
+        auto kernel = setUp(0.0f);
+        kernel->noteOff(40);
+        render(*kernel, 250, 2, 250);
+        kernel->noteOn(45, 100);
+        render(*kernel, 250, 2, 250);
+        CHECK(kernel->envelopeDisplayPosition() > 0.37f, "with Re-Trigger off, the envelope should carry on: %f",
+              kernel->envelopeDisplayPosition());
+    }
+}
+
+void testEnvelopeRunsThroughRelease() {
+    auto kernel = makeKernel(kSampleRate, true);
+    kernel->setParameter(envTimeMode, 1.0f);
+    kernel->setParameter(envFreeTime, 1000.0f);
+    kernel->setParameter(ampRelease, 1000.0f);
+    kernel->noteOn(40, 100);
+    render(*kernel, 4800);
+    kernel->noteOff(40);
+    const float before = kernel->envelopeDisplayPosition();
+    render(*kernel, 4800);
+    CHECK(kernel->isSounding(), "the voice should still be releasing");
+    CHECK(kernel->envelopeDisplayPosition() > before + 0.09f, "the envelope stopped in the release: %f then %f",
+          before, kernel->envelopeDisplayPosition());
+}
+
+void testRandomRepeatsWithTheSong() {
+    auto run = []() {
+        auto kernel = makeEnvelopeKernel(4);   // 1/16
+        kernel->setParameter(envDirection, 4.0f);
+        int64_t time = 0;
+        kernel->setHostTiming(128.0, 16.0, 0, true, 4, 4);
+        kernel->noteOn(40, 100);
+        std::vector<float> positions;
+        for (int block = 0; block < 40; ++block) {
+            render(*kernel, 256, 2, 256, &time);
+            positions.push_back(kernel->envelopeDisplayPosition());
+        }
+        return positions;
+    };
+    CHECK(run() == run(), "Random should repeat exactly when the song plays from the same place");
+}
+
+// MARK: - Envelope on the filter
+
+void setFlatDrawing(Kernel& kernel, float level) {
+    const float xs[] = { 0.0f, 1.0f };
+    const float ys[] = { level, level };
+    kernel.setEnvelopeCurve(xs, ys, nullptr, 2);
+}
+
+double brightness(const std::vector<float>& output, size_t from) {
+    std::vector<float> difference(output.size());
+    for (size_t index = 1; index < output.size(); ++index) {
+        difference[index] = output[index] - output[index - 1];
+    }
+    return rms(difference, from) / std::max(1e-9, rms(output, from));
+}
+
+void testEnvelopeMovesTheCutoff() {
+    auto play = [](float level, float amount) {
+        auto kernel = makeKernel(kSampleRate, true);
+        kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(cutoff, 3000.0f);
+        kernel->setParameter(envAmount, amount);
+        setFlatDrawing(*kernel, level);
+        render(*kernel, 256);   // taken up while silent, so there is no crossfade to hear
+        kernel->noteOn(45, 100);
+        return render(*kernel, frames(0.4));
+    };
+    const auto top = play(1.0f, 4.0f);
+    const auto bottom = play(0.0f, 4.0f);
+    CHECK(brightness(bottom, frames(0.1)) < brightness(top, frames(0.1)) * 0.5,
+          "the bottom of the drawing should close the filter: brightness %f against %f",
+          brightness(bottom, frames(0.1)), brightness(top, frames(0.1)));
+
+    const auto noAmountTop = play(1.0f, 0.0f);
+    const auto noAmountBottom = play(0.0f, 0.0f);
+    CHECK(noAmountTop == noAmountBottom, "with Amount at 0 the drawing should change nothing");
+    CHECK(top == noAmountTop, "the top of the drawing should sit exactly on CUTOFF");
+}
+
+void testRedrawingCrossfades() {
+    auto kernel = makeKernel(kSampleRate, true);
+    setFlatDrawing(*kernel, 0.0f);
+    render(*kernel, 256);
+    kernel->noteOn(40, 100);
+    render(*kernel, 256);
+    CHECK(kernel->envelopeDisplayValue() == 0.0f, "flat drawing at 0 reads %f", kernel->envelopeDisplayValue());
+
+    setFlatDrawing(*kernel, 1.0f);
+    render(*kernel, 256);   // about 5 ms into a 20 ms fade
+    const float partway = kernel->envelopeDisplayValue();
+    CHECK(partway > 0.1f && partway < 0.5f, "a redrawn envelope should fade in over about 20 ms, but read %f after 5 ms", partway);
+    render(*kernel, frames(0.03));
+    CHECK(kernel->envelopeDisplayValue() == 1.0f, "the fade did not finish: %f", kernel->envelopeDisplayValue());
+}
+
+void testFactoryShapes() {
+    auto kernel = makeKernel();
+    CHECK(kernel->envelopePointCount() == 5, "a new kernel should start on the mock-up drawing, has %d points",
+          kernel->envelopePointCount());
+    CHECK(std::string(kernel->factoryShapeName(0)) == "Mock-up", "first shape is %s", kernel->factoryShapeName(0));
+
+    for (int index = 0; index < kernel->factoryShapeCount(); ++index) {
+        kernel->loadFactoryShape(index);
+        const int count = kernel->envelopePointCount();
+        CHECK(count >= 2 && kernel->envelopePointX(0) == 0.0f && kernel->envelopePointX(count - 1) == 1.0f,
+              "factory shape %s is malformed", kernel->factoryShapeName(index));
+        std::vector<float> table(64);
+        kernel->copyEnvelopeTable(table.data(), int(table.size()));
+        CHECK(std::all_of(table.begin(), table.end(), [](float value) { return value >= 0.0f && value <= 1.0f; }),
+              "factory shape %s leaves 0...1", kernel->factoryShapeName(index));
+    }
+
+    kernel->setEnvelopeCurve(nullptr, nullptr, nullptr, 5);
+    CHECK(kernel->envelopePointCount() == 2 && kernel->envelopePointY(0) == 0.5f, "missing points should give a flat line");
+}
+
+void testEnvelopeExtremesStayBounded() {
+    auto kernel = makeKernel(kSampleRate, true);
+    kernel->setParameter(outputLevel, 6.0f);
+    kernel->setParameter(resonance, 100.0f);
+    kernel->setParameter(cutoff, 20000.0f);
+    kernel->setParameter(envAmount, 8.0f);
+    kernel->setParameter(envTimeMode, 1.0f);
+    kernel->setParameter(envFreeTime, 10.0f);
+    kernel->setParameter(accelStart, 4.0f);
+    kernel->setParameter(accelEnd, 4.0f);
+    kernel->loadFactoryShape(4);   // Gate: hard jumps
+    kernel->noteOn(33, 127);
+
+    float highest = 0.0f;
+    bool finite = true;
+    for (int direction = 0; direction < Kernel::directionCount(); ++direction) {
+        kernel->setParameter(envDirection, float(direction));
+        const auto output = render(*kernel, frames(0.2));
+        highest = std::max(highest, peak(output));
+        finite = finite && allFinite(output);
+    }
+    CHECK(highest <= 1.0f, "fast, deep envelope left full scale: peak %f", highest);
+    CHECK(finite, "fast, deep envelope produced a non-finite sample");
+}
+
 } // namespace
 
 int main() {
@@ -441,6 +775,20 @@ int main() {
     testCutoffDarkensTheSound();
     testExtremesStayBoundedAndFinite();
     testMonoOutput();
+    testCurveRendering();
+    testCurveSanitising();
+    testDirections();
+    testSyncLengths();
+    testEnvelopeFollowsHostPosition();
+    testEnvelopeRunsAtTempoWhenStopped();
+    testFreeTime();
+    testRetrigger();
+    testEnvelopeRunsThroughRelease();
+    testRandomRepeatsWithTheSong();
+    testEnvelopeMovesTheCutoff();
+    testRedrawingCrossfades();
+    testFactoryShapes();
+    testEnvelopeExtremesStayBounded();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

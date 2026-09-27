@@ -35,6 +35,9 @@ public:
         
         AUEventSampleTime now = AUEventSampleTime(timestamp->mSampleTime);
         AUAudioFrameCount framesRemaining = frameCount;
+
+        // Tempo, song position and transport, once per cycle, before any of its events or audio.
+        mKernel.beginRenderCycle(now);
         AURenderEvent const *nextEvent = events; // events is a linked list, at the beginning, the nextEvent is the first event
         
         auto callProcess = [this] (AudioBufferList* outBufferListPtr, AUEventSampleTime now, AUAudioFrameCount frameCount, AUAudioFrameCount const frameOffset) {

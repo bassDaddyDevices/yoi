@@ -106,7 +106,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         guard let observableParameterTree = audioUnit.observableParameterTree else {
             return
         }
-        let content = YoiExtensionMainView(parameterTree: observableParameterTree)
+        let content = YoiExtensionMainView(parameterTree: observableParameterTree,
+                                           audioUnit: audioUnit as? YoiExtensionAudioUnit)
         let host = HostingController(rootView: content)
         self.addChild(host)
         host.view.frame = self.view.bounds

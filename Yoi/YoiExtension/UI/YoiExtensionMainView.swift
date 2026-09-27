@@ -12,10 +12,30 @@ import SwiftUI
 
 struct YoiExtensionMainView: View {
     var parameterTree: ObservableAUParameterGroup
+    var audioUnit: YoiExtensionAudioUnit?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                section("Drawn Envelope") {
+                    if let audioUnit {
+                        Menu("Load Drawing") {
+                            ForEach(Array(audioUnit.factoryShapeNames.enumerated()), id: \.offset) { index, name in
+                                Button(name) { audioUnit.loadFactoryShape(index) }
+                            }
+                        }
+                        .padding()
+                    }
+                    ParameterSlider(param: parameterTree.envelope.envAmount)
+                    ParameterPicker(param: parameterTree.envelope.envTimeMode, options: ["Sync", "Free"])
+                    ParameterPicker(param: parameterTree.envelope.envSyncLength, options: syncLengthNames, menu: true)
+                    ParameterSlider(param: parameterTree.envelope.envFreeTime, logarithmic: true)
+                    ParameterPicker(param: parameterTree.envelope.envDirection, options: directionNames, menu: true)
+                    ParameterPicker(param: parameterTree.envelope.envRetrigger, options: ["Off", "On"])
+                    ParameterSlider(param: parameterTree.envelope.accelStart, logarithmic: true)
+                    ParameterSlider(param: parameterTree.envelope.accelEnd, logarithmic: true)
+                    ParameterSlider(param: parameterTree.envelope.accelCurve)
+                }
                 section("Oscillators") {
                     ParameterSlider(param: parameterTree.oscillators.oscShape)
                     ParameterSlider(param: parameterTree.oscillators.subLevel)

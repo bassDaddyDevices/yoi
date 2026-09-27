@@ -71,7 +71,9 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     public override func allocateRenderResources() throws {
 		let outputChannelCount = self.outputBusses[0].format.channelCount
 		
-		kernel.setMusicalContextBlock(self.musicalContextBlock)
+		// The kernel takes the host's tempo and transport blocks itself and keeps them alive;
+		// passing them from Swift would hand it temporaries that are freed straight away.
+		kernel.captureHostBlocks(self)
 		kernel.initialize(Int32(outputChannelCount), outputBus!.format.sampleRate)
 
         processHelper?.setChannelCount(0, self.outputBusses[0].format.channelCount)
@@ -84,6 +86,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     public override func deallocateRenderResources() {
         
         // Deallocate your resources.
+        kernel.releaseHostBlocks()
         kernel.deInitialize()
         
         super.deallocateRenderResources()
@@ -131,6 +134,12 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
                 return String(format: value < 10 ? "%.1f ms" : "%.0f ms", value)
             case .relativeSemiTones:
                 return String(format: "%.0f st", value)
+            case .octaves:
+                return String(format: "%.1f oct", value)
+            case .rate:
+                return String(format: "%.2f\u{00D7}", value)
+            case .boolean:
+                return value >= 0.5 ? "On" : "Off"
             case .indexed:
                 let index = Int(value.rounded())
                 if let strings = param.valueStrings, strings.indices.contains(index) {
@@ -142,4 +151,64 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             }
 		}
 	}
+
+    // MARK: - Drawn envelope
+
+    /// Serialises everyone who edits the drawing (the editor, state restore). The kernel accepts
+    /// one publisher at a time; the render thread never takes this lock.
+    private let curveLock = NSLock()
+
+    /// Names of the built-in drawings, in order.
+    var factoryShapeNames: [String] {
+        (0..<Int(YoiExtensionDSPKernel.factoryShapeCount())).map {
+            String(cString: YoiExtensionDSPKernel.factoryShapeName(Int32($0)))
+        }
+    }
+
+    /// Replaces the drawing with a built-in one.
+    func loadFactoryShape(_ index: Int) {
+        curveLock.lock()
+        defer { curveLock.unlock() }
+        kernel.loadFactoryShape(Int32(index))
+    }
+
+    /// The drawing as points of `[x, y, bend]`: x and y are 0...1, bend is -1...1. Setting it
+    /// accepts anything; the kernel cleans the points up before using them.
+    var envelopeCurve: [[Float]] {
+        get {
+            curveLock.lock()
+            defer { curveLock.unlock() }
+            return (0..<Int(kernel.envelopePointCount())).map { index in
+                let i = Int32(index)
+                return [kernel.envelopePointX(i), kernel.envelopePointY(i), kernel.envelopePointBend(i)]
+            }
+        }
+        set {
+            let xs = newValue.map { $0.count > 0 ? $0[0] : 0 }
+            let ys = newValue.map { $0.count > 1 ? $0[1] : 0.5 }
+            let bends = newValue.map { $0.count > 2 ? $0[2] : 0 }
+            curveLock.lock()
+            defer { curveLock.unlock() }
+            kernel.setEnvelopeCurve(xs, ys, bends, Int32(newValue.count))
+        }
+    }
+
+    // MARK: - State
+
+    private static let envelopeCurveStateKey = "yoiEnvelopeCurve"
+
+    /// The parameter tree covers the knobs; the drawing is saved alongside them by hand.
+    public override var fullState: [String : Any]? {
+        get {
+            var state = super.fullState ?? [:]
+            state[Self.envelopeCurveStateKey] = envelopeCurve
+            return state
+        }
+        set {
+            super.fullState = newValue
+            if let points = newValue?[Self.envelopeCurveStateKey] as? [[NSNumber]] {
+                envelopeCurve = points.map { point in point.map { $0.floatValue } }
+            }
+        }
+    }
 }

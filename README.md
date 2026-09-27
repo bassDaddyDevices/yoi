@@ -14,8 +14,10 @@ Yoi/                          Xcode project (Audio Unit Extension App template)
 └── YoiExtension/
     ├── DSP/
     │   ├── YoiExtensionDSPKernel.hpp   YOI's voice (portable C++, shared with VST3 and tests)
+    │   ├── YoiFactoryShapes.hpp        built-in drawings for the envelope
     │   └── Shared/                     Bass Daddy Devices building blocks, no YOI knowledge:
-    │                                   oscillators, filter, envelope, note stack, glide
+    │                                   oscillators, filter, ADSR, note stack, glide, and the
+    │                                   drawn curve and its looping playback (timing, directions)
     ├── Parameters/           parameter addresses (C) and the host-facing tree (Swift)
     └── UI/                   temporary SwiftUI slider panel, until the HTML editor
 Tests/                        C++ render tests for the kernel (CMake)

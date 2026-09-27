@@ -8,22 +8,30 @@
 #pragma once
 
 // The kernel is shared with the VST3 build and the DSP tests. Everything Audio Unit specific
-// (render events, MIDI event lists and the musical context block) is only compiled where
-// AudioToolbox is in use; those other builds define YOI_PORTABLE so they never depend on it.
+// (render events, MIDI event lists and the host's musical context and transport blocks) is only
+// compiled where AudioToolbox is in use; those other builds define YOI_PORTABLE so they never
+// depend on it.
 #if defined(__APPLE__) && !defined(YOI_PORTABLE)
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreMIDI/CoreMIDI.h>
+#include "Shared/BDDRetainedBlock.hpp"
 #define YOI_AUDIO_UNIT 1
 #else
 #define YOI_AUDIO_UNIT 0
 #endif
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <span>
 
 #include "YoiExtensionParameterAddresses.h"
+#include "YoiFactoryShapes.hpp"
+#include "Shared/BDDAtomics.hpp"
+#include "Shared/BDDDrawnCurve.hpp"
+#include "Shared/BDDDrawnEnvelope.hpp"
 #include "Shared/BDDEnvelopes.hpp"
 #include "Shared/BDDFilters.hpp"
 #include "Shared/BDDMath.hpp"
@@ -41,17 +49,29 @@
      mix -> state-variable filter (low-pass or band-pass) -> amp envelope
          -> output level -> soft limiter -> every output channel
 
- Later stages add the drawn envelope on the filter cutoff (stage 2), the wavefolder, downsampler
- and clean-up filter (stage 3), and the vowel filter (stage 4).
+     drawn envelope: clock (Sync to the host, or Free) -> direction -> read the drawing (0...1)
+         -> filter cutoff = CUTOFF lowered by Amount x (1 - drawing), in octaves
+
+ Later stages add the wavefolder, downsampler and clean-up filter (stage 3) and the vowel filter
+ (stage 4).
 
  Parameters only ever store their new target here, from whichever thread sets them. Anything
  derived from them (envelope coefficients, smoothed values) is recalculated on the render thread,
- so the audio never reads half-updated state.
+ so the audio never reads half-updated state. The drawing arrives the same way, through a
+ lock-free exchange.
 
  As a non-ObjC class, this is safe to use from the render thread.
  */
 class YoiExtensionDSPKernel {
 public:
+    YoiExtensionDSPKernel() {
+        // A new instance starts on the first factory drawing, already in place for the first block.
+        loadFactoryShape(0);
+        mCurrentTable = mCurveExchange.shared;
+        mPreviousTable = mCurrentTable;
+        mObservedCurveSequence = mCurveExchange.sequence;
+    }
+
     void initialize(int channelCount, double inSampleRate) {
         (void)channelCount;
         mSampleRate = inSampleRate;
@@ -59,11 +79,12 @@ public:
         mAmpEnvelope.setSampleRate(inSampleRate);
         mAmpEnvelope.reset();
         mAppliedAttack = mAppliedDecay = mAppliedSustain = mAppliedRelease = -1.0f;
-        applyEnvelopeSettings();
+        applyAmpEnvelopeSettings();
 
         for (auto* smoother : { &mOscShapeSmoother, &mSubLevelSmoother, &mSubShapeSmoother,
                                 &mCutoffSmoother, &mResonanceSmoother, &mFilterModeSmoother,
-                                &mOutputSmoother }) {
+                                &mOutputSmoother, &mEnvAmountSmoother, &mAccelStartSmoother,
+                                &mAccelEndSmoother, &mAccelCurveSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mBendSmoother.setTimeConstant(kBendSmoothingSeconds, inSampleRate);
@@ -75,6 +96,10 @@ public:
         mMainOscillator.reset();
         mSubOscillator.reset();
         mFilter.reset();
+
+        mEnvelopeClock = bdd::EnvelopeClock();
+        mCurveFade = 1.0f;
+        mCurveFadeStep = float(1.0 / (kCurveCrossfadeSeconds * inSampleRate));
     }
 
     void deInitialize() {
@@ -138,6 +163,33 @@ public:
             case YoiExtensionParameterAddress::ampRelease:
                 mReleaseMilliseconds = std::max(0.0f, value);
                 break;
+            case YoiExtensionParameterAddress::envAmount:
+                mEnvAmount = std::clamp(value, 0.0f, 8.0f);
+                break;
+            case YoiExtensionParameterAddress::envTimeMode:
+                mEnvTimeMode = std::clamp(int(std::lround(value)), 0, 1);
+                break;
+            case YoiExtensionParameterAddress::envSyncLength:
+                mEnvSyncLength = std::clamp(int(std::lround(value)), 0, int(bdd::kSyncLengths.size()) - 1);
+                break;
+            case YoiExtensionParameterAddress::envFreeTime:
+                mEnvFreeMilliseconds = std::clamp(value, 10.0f, 30000.0f);
+                break;
+            case YoiExtensionParameterAddress::envDirection:
+                mEnvDirection = std::clamp(int(std::lround(value)), 0, bdd::kEnvelopeDirectionCount - 1);
+                break;
+            case YoiExtensionParameterAddress::envRetrigger:
+                mEnvRetrigger = std::clamp(int(std::lround(value)), 0, 1);
+                break;
+            case YoiExtensionParameterAddress::accelStart:
+                mAccelStart = std::clamp(value, 0.1f, 4.0f);
+                break;
+            case YoiExtensionParameterAddress::accelEnd:
+                mAccelEnd = std::clamp(value, 0.1f, 4.0f);
+                break;
+            case YoiExtensionParameterAddress::accelCurve:
+                mAccelCurve = std::clamp(value, -1.0f, 1.0f);
+                break;
         }
     }
 
@@ -159,6 +211,15 @@ public:
             case YoiExtensionParameterAddress::ampDecay: return mDecayMilliseconds;
             case YoiExtensionParameterAddress::ampSustain: return mSustain * 100.0f;
             case YoiExtensionParameterAddress::ampRelease: return mReleaseMilliseconds;
+            case YoiExtensionParameterAddress::envAmount: return mEnvAmount;
+            case YoiExtensionParameterAddress::envTimeMode: return AUValue(mEnvTimeMode);
+            case YoiExtensionParameterAddress::envSyncLength: return AUValue(mEnvSyncLength);
+            case YoiExtensionParameterAddress::envFreeTime: return mEnvFreeMilliseconds;
+            case YoiExtensionParameterAddress::envDirection: return AUValue(mEnvDirection);
+            case YoiExtensionParameterAddress::envRetrigger: return AUValue(mEnvRetrigger);
+            case YoiExtensionParameterAddress::accelStart: return mAccelStart;
+            case YoiExtensionParameterAddress::accelEnd: return mAccelEnd;
+            case YoiExtensionParameterAddress::accelCurve: return mAccelCurve;
             default: return 0.f;
         }
     }
@@ -179,6 +240,9 @@ public:
     /// Glide modes, as stored in the `glideMode` parameter.
     enum GlideMode : int { glideLegato = 0, glideAlways = 1 };
 
+    /// Envelope time modes, as stored in the `envTimeMode` parameter.
+    enum EnvelopeTimeMode : int { envelopeSync = 0, envelopeFree = 1 };
+
     /// A key went down. Velocity is accepted for the future but does not shape the sound yet.
     void noteOn(int note, int velocity) {
         (void)velocity;
@@ -188,7 +252,7 @@ public:
     }
 
     /// A key came up. If it was the sounding key and others are still held, the voice slides back
-    /// to the most recent of those without restarting its envelope.
+    /// to the most recent of those without restarting its envelopes.
     void noteOff(int note) {
         const bool wasSounding = (mHeldNotes.newest() == note);
         mHeldNotes.remove(note);
@@ -227,10 +291,133 @@ public:
         return mGlide.current;
     }
 
+    // MARK: - Host timing
+
+    /// Tells the kernel where the host's song position was at `sampleTime`, in quarter notes, and
+    /// whether its transport is running. The Audio Unit calls this once per render cycle from the
+    /// host's blocks; the VST3 build will call it from its process context. Until it is called the
+    /// kernel assumes 120 BPM in 4/4 with the transport stopped.
+    void setHostTiming(double tempo, double beatPosition, int64_t sampleTime, bool playing,
+                       double numerator, double denominator) {
+        if (std::isfinite(tempo) && tempo > 0.0) {
+            mHostTempo = std::clamp(tempo, 10.0, 999.0);
+        }
+        mHostBeat = std::isfinite(beatPosition) ? beatPosition : 0.0;
+        mHostSampleTime = sampleTime;
+        mHostPlaying = playing;
+        if (numerator > 0.0 && denominator > 0.0) {
+            mHostNumerator = numerator;
+            mHostDenominator = denominator;
+        }
+    }
+
+    // MARK: - Drawn envelope curve
+    // Called from the thread that edits the drawing (the UI, or state restore). Rendering happens
+    // on that thread; the render thread only ever picks up the finished table.
+
+    /// Publishes a new drawing: `count` points given as separate x, y and bend arrays (`bends` may
+    /// be null). The points are cleaned up first, so any input is safe.
+    void setEnvelopeCurve(const float* xs, const float* ys, const float* bends, int count) {
+        std::array<bdd::CurvePoint, bdd::kMaxCurvePoints> points{};
+        const int usable = (xs != nullptr && ys != nullptr) ? std::clamp(count, 0, bdd::kMaxCurvePoints) : 0;
+        for (int i = 0; i < usable; ++i) {
+            points[size_t(i)] = { xs[i], ys[i], (bends != nullptr) ? bends[i] : 0.0f };
+        }
+        publishEnvelopeCurve(points.data(), usable);
+    }
+
+    /// Option names for the sync-length and direction parameters, so the parameter tree reads them
+    /// from the one list the DSP uses.
+    static int syncLengthCount() { return int(bdd::kSyncLengths.size()); }
+    static const char* syncLengthName(int index) {
+        return bdd::kSyncLengths[size_t(std::clamp(index, 0, syncLengthCount() - 1))].name;
+    }
+    static int directionCount() { return bdd::kEnvelopeDirectionCount; }
+    static const char* directionName(int index) {
+        static constexpr const char* names[bdd::kEnvelopeDirectionCount] = {
+            "Forward", "Backward", "Pingpong", "Sine", "Random", "Accelerate"
+        };
+        return names[std::clamp(index, 0, bdd::kEnvelopeDirectionCount - 1)];
+    }
+
+    static int factoryShapeCount() {
+        return int(yoi::kFactoryShapes.size());
+    }
+
+    static const char* factoryShapeName(int index) {
+        return yoi::kFactoryShapes[size_t(std::clamp(index, 0, factoryShapeCount() - 1))].name;
+    }
+
+    void loadFactoryShape(int index) {
+        const auto& shape = yoi::kFactoryShapes[size_t(std::clamp(index, 0, factoryShapeCount() - 1))];
+        publishEnvelopeCurve(shape.points.data(), shape.count);
+    }
+
+    /// The drawing as last published, after clean-up: what to save, and what an editor shows.
+    int envelopePointCount() const { return mPublishedCount; }
+    float envelopePointX(int index) const { return publishedPoint(index).x; }
+    float envelopePointY(int index) const { return publishedPoint(index).y; }
+    float envelopePointBend(int index) const { return publishedPoint(index).bend; }
+
+    /// Samples the rendered drawing into `destination` (`count` values across 0...1), so an editor
+    /// can draw exactly what the envelope plays without repeating its maths.
+    void copyEnvelopeTable(float* destination, int count) const {
+        for (int i = 0; destination != nullptr && i < count; ++i) {
+            const double x = (count > 1) ? double(i) / double(count - 1) : 0.0;
+            destination[i] = bdd::lookup(mPublishScratch.data(), bdd::kCurveTableSize, x);
+        }
+    }
+
+    /// Where the envelope was reading in the drawing (0...1) and the value it read, at the end of
+    /// the last block. For the editor's playhead; safe to call from any thread.
+    float envelopeDisplayPosition() {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(mDisplayPositionBits));
+    }
+
+    float envelopeDisplayValue() {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(mDisplayValueBits));
+    }
+
 #if YOI_AUDIO_UNIT
     // MARK: - Musical Context
-    void setMusicalContextBlock(AUHostMusicalContextBlock contextBlock) {
-        mMusicalContextBlock = contextBlock;
+
+    /// Takes the host's musical context and transport state blocks from the audio unit, holding
+    /// its own references to them. Call from allocateRenderResources, after the host has set them.
+    /// Reading them here, rather than having Swift pass them in, matters: Swift would hand over a
+    /// temporary wrapper that is freed as soon as the call returns (see BDDRetainedBlock.hpp).
+    void captureHostBlocks(AUAudioUnit* audioUnit) {
+        mMusicalContextBlock.reset(audioUnit != nil ? BDD_BLOCK_AS_POINTER(audioUnit.musicalContextBlock) : nullptr);
+        mTransportStateBlock.reset(audioUnit != nil ? BDD_BLOCK_AS_POINTER(audioUnit.transportStateBlock) : nullptr);
+    }
+
+    /// Drops the host blocks. Call from deallocateRenderResources, when rendering has stopped.
+    void releaseHostBlocks() {
+        mMusicalContextBlock.reset(nullptr);
+        mTransportStateBlock.reset(nullptr);
+    }
+
+    /// Asks the host for tempo, song position and transport state. Called once at the start of
+    /// every render cycle, before any events or audio in it.
+    void beginRenderCycle(int64_t sampleTime) {
+        double tempo = mHostTempo;
+        double numerator = mHostNumerator;
+        NSInteger denominator = NSInteger(mHostDenominator);
+        double beat = 0.0;
+        const bool haveContext = mMusicalContextBlock.isSet()
+            && BDD_POINTER_AS_BLOCK(AUHostMusicalContextBlock, mMusicalContextBlock.pointer())(
+                   &tempo, &numerator, &denominator, &beat, nullptr, nullptr);
+
+        AUHostTransportStateFlags flags = 0;
+        const bool haveTransport = mTransportStateBlock.isSet()
+            && BDD_POINTER_AS_BLOCK(AUHostTransportStateBlock, mTransportStateBlock.pointer())(
+                   &flags, nullptr, nullptr, nullptr);
+        const bool playing = haveContext && haveTransport && (flags & AUHostTransportStateMoving) != 0;
+
+        if (haveContext) {
+            setHostTiming(tempo, beat, sampleTime, playing, numerator, double(denominator));
+        } else {
+            mHostPlaying = false;
+        }
     }
 
     // MARK: - MIDI Protocol
@@ -242,17 +429,33 @@ public:
     /**
      MARK: - Internal Process
 
-     Renders `frameCount` samples of the voice into every output buffer.
+     Renders `frameCount` samples of the voice into every output buffer. `bufferStartTime` is the
+     sample time of the first frame, which places it against the host's song position.
      */
     void process(std::span<float *> outputBuffers, int64_t bufferStartTime, uint32_t frameCount) {
-        (void)bufferStartTime;
+        applyAmpEnvelopeSettings();
+        adoptPublishedCurve();
 
-        applyEnvelopeSettings();
+        // Envelope timing for this block.
+        const double beatsPerSample = mHostTempo / 60.0 / mSampleRate;
+        const double syncLength = bdd::syncLengthInQuarterNotes(mEnvSyncLength, mHostNumerator, mHostDenominator);
+        const bool synced = (mEnvTimeMode == envelopeSync);
+        const bool locked = synced && mHostPlaying && mEnvRetrigger == 0;
+        const double cyclesPerSample = synced ? beatsPerSample / syncLength
+                                              : 1000.0 / (double(mEnvFreeMilliseconds) * mSampleRate);
+        double beat = mHostBeat + double(bufferStartTime - mHostSampleTime) * beatsPerSample;
 
         if (mBypassed || !mAmpEnvelope.isActive()) {
             // Nothing is sounding, so there is nothing to smooth towards either: settle every
-            // control where it was left, so the next note starts exactly on its settings.
+            // control where it was left, so the next note starts exactly on its settings. A free
+            // envelope keeps running, so it is wherever it should be when the next note comes.
             snapSmoothers();
+            mCurveFade = 1.0f;
+            if (locked) {
+                mEnvelopeClock.lockTo((beat + double(frameCount) * beatsPerSample) / syncLength);
+            } else {
+                mEnvelopeClock.advance(double(frameCount) * cyclesPerSample);
+            }
             for (auto* buffer : outputBuffers) {
                 std::fill_n(buffer, frameCount, 0.f);
             }
@@ -263,6 +466,10 @@ public:
         const float cutoffTarget = std::log2(mCutoffHertz);
         const float outputTarget = bdd::decibelsToGain(mOutputDecibels);
         const float filterModeTarget = float(mFilterMode);
+        const auto direction = bdd::EnvelopeDirection(mEnvDirection);
+
+        double drawingPosition = 0.0;
+        float drawing = 0.0f;
 
         for (uint32_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
             const float mainMorph = mOscShapeSmoother.next(mOscShape);
@@ -273,6 +480,24 @@ public:
             const float bandPassAmount = mFilterModeSmoother.next(filterModeTarget);
             const float outputGain = mOutputSmoother.next(outputTarget);
             const float bend = mBendSmoother.next(mBendPosition);
+            const float envAmount = mEnvAmountSmoother.next(mEnvAmount);
+            const bdd::AccelerateSettings accelerate {
+                double(mAccelStartSmoother.next(mAccelStart)),
+                double(mAccelEndSmoother.next(mAccelEnd)),
+                double(mAccelCurveSmoother.next(mAccelCurve)),
+            };
+
+            // Drawn envelope: where in the drawing, and what it says there.
+            if (locked) {
+                mEnvelopeClock.lockTo(beat / syncLength);
+                beat += beatsPerSample;
+            }
+            drawingPosition = bdd::readPosition(direction, mEnvelopeClock.index(), mEnvelopeClock.phase(),
+                                             mEnvelopeClock.seed, accelerate);
+            drawing = readDrawing(drawingPosition);
+            if (!locked) {
+                mEnvelopeClock.advance(cyclesPerSample);
+            }
 
             const double pitch = mGlide.next() + double(bend * mBendRange);
             const double increment = bdd::noteToHertz(pitch) / mSampleRate;
@@ -281,7 +506,9 @@ public:
             const float sub = mSubOscillator.next(increment * subRatio, subMorph);
             const double mix = kOscillatorHeadroom * double(main + subGain * sub);
 
-            mFilter.setCoefficients(std::exp2(double(cutoffOctaves)),
+            // The top of the drawing is the CUTOFF setting; the bottom is Amount octaves below it.
+            const double modulatedOctaves = double(cutoffOctaves) - double(envAmount) * (1.0 - double(drawing));
+            mFilter.setCoefficients(std::exp2(modulatedOctaves),
                                     bdd::StateVariableFilter::qForResonance(resonanceAmount),
                                     mSampleRate);
             const auto filtered = mFilter.process(mix);
@@ -294,6 +521,9 @@ public:
                 buffer[frameIndex] = sample;
             }
         }
+
+        bdd::atomics::storeRelaxed(mDisplayPositionBits, std::bit_cast<uint32_t>(float(drawingPosition)));
+        bdd::atomics::storeRelaxed(mDisplayValueBits, std::bit_cast<uint32_t>(drawing));
     }
 
 #if YOI_AUDIO_UNIT
@@ -441,6 +671,8 @@ private:
     static constexpr double kSmoothingSeconds = 0.015;
     /// Pitch bend arrives in steps; this is just enough to hide them without feeling late.
     static constexpr double kBendSmoothingSeconds = 0.005;
+    /// A redrawn envelope fades in over this long, so editing it while it plays never clicks.
+    static constexpr double kCurveCrossfadeSeconds = 0.02;
     /// Scales the oscillator mix so that the default sound peaks around -7 dBFS (about -15 dBFS
     /// RMS). That leaves room for resonance, which can add 10 dB or more at a harmonic, before
     /// the limiter's knee at -4.4 dBFS, so the limiter only catches genuinely extreme settings.
@@ -465,12 +697,16 @@ private:
                 mSubOscillator.reset();
             }
             mAmpEnvelope.gateOn();
+
+            if (mEnvRetrigger != 0) {
+                mEnvelopeClock.restart();
+            }
         }
     }
 
-    /// Recalculates envelope coefficients when their settings have changed. Runs on the render
-    /// thread, once per block, so the envelope never sees a half-written update.
-    void applyEnvelopeSettings() {
+    /// Recalculates amp envelope coefficients when their settings have changed. Runs on the
+    /// render thread, once per block, so the envelope never sees a half-written update.
+    void applyAmpEnvelopeSettings() {
         if (mAttackMilliseconds != mAppliedAttack) {
             mAppliedAttack = mAttackMilliseconds;
             mAmpEnvelope.setAttack(double(mAttackMilliseconds) * 0.001);
@@ -489,6 +725,43 @@ private:
         }
     }
 
+    /// Cleans up, renders and publishes a drawing. Runs on the editing thread.
+    void publishEnvelopeCurve(const bdd::CurvePoint* points, int count) {
+        mPublishedCount = bdd::sanitizeCurve(points, count, mPublishedPoints.data());
+        bdd::renderCurveTable(mPublishedPoints.data(), mPublishedCount, mPublishScratch.data(), bdd::kCurveTableSize);
+        mCurveExchange.publish(mPublishScratch.data());
+    }
+
+    const bdd::CurvePoint& publishedPoint(int index) const {
+        return mPublishedPoints[size_t(std::clamp(index, 0, std::max(0, mPublishedCount - 1)))];
+    }
+
+    /// Picks up a newly published drawing and starts fading towards it. Runs on the render thread.
+    void adoptPublishedCurve() {
+        if (!mCurveExchange.fetch(mIncomingTable, mObservedCurveSequence)) {
+            return;
+        }
+        // Bake whatever is audible now into the table being faded from, so a second edit in the
+        // middle of a fade continues from what was heard rather than jumping.
+        for (size_t i = 0; i < mPreviousTable.size(); ++i) {
+            mPreviousTable[i] += mCurveFade * (mCurrentTable[i] - mPreviousTable[i]);
+        }
+        mCurrentTable = mIncomingTable;
+        mCurveFade = 0.0f;
+    }
+
+    /// The drawing's value at `position`, part way through a crossfade if the drawing just changed.
+    float readDrawing(double position) {
+        const float value = bdd::lookup(mCurrentTable.data(), bdd::kCurveTableSize, position);
+        if (mCurveFade >= 1.0f) {
+            return value;
+        }
+        const float previous = bdd::lookup(mPreviousTable.data(), bdd::kCurveTableSize, position);
+        const float faded = previous + mCurveFade * (value - previous);
+        mCurveFade = std::min(1.0f, mCurveFade + mCurveFadeStep);
+        return faded;
+    }
+
     void snapSmoothers() {
         mOscShapeSmoother.snap(mOscShape);
         mSubLevelSmoother.snap(mSubLevel);
@@ -498,11 +771,16 @@ private:
         mFilterModeSmoother.snap(float(mFilterMode));
         mOutputSmoother.snap(bdd::decibelsToGain(mOutputDecibels));
         mBendSmoother.snap(mBendPosition);
+        mEnvAmountSmoother.snap(mEnvAmount);
+        mAccelStartSmoother.snap(mAccelStart);
+        mAccelEndSmoother.snap(mAccelEnd);
+        mAccelCurveSmoother.snap(mAccelCurve);
     }
 
     // MARK: - Member Variables
 #if YOI_AUDIO_UNIT
-    AUHostMusicalContextBlock mMusicalContextBlock = nullptr;
+    bdd::RetainedBlock mMusicalContextBlock;
+    bdd::RetainedBlock mTransportStateBlock;
 #endif
 
     double mSampleRate = 44100.0;
@@ -525,10 +803,19 @@ private:
     float mDecayMilliseconds = 300.0f;
     float mSustain = 1.0f;
     float mReleaseMilliseconds = 150.0f;
+    float mEnvAmount = 3.0f;
+    int mEnvTimeMode = envelopeSync;
+    int mEnvSyncLength = 6;   // 1/8
+    float mEnvFreeMilliseconds = 500.0f;
+    int mEnvDirection = 0;    // Forward
+    int mEnvRetrigger = 0;
+    float mAccelStart = 0.25f;
+    float mAccelEnd = 2.0f;
+    float mAccelCurve = 0.0f;
 
     float mBendPosition = 0.0f;
 
-    // The envelope settings last handed to the envelope, to spot changes.
+    // The amp envelope settings last handed to the envelope, to spot changes.
     float mAppliedAttack = -1.0f;
     float mAppliedDecay = -1.0f;
     float mAppliedSustain = -1.0f;
@@ -542,6 +829,10 @@ private:
     bdd::Smoother mFilterModeSmoother;
     bdd::Smoother mOutputSmoother;
     bdd::Smoother mBendSmoother;
+    bdd::Smoother mEnvAmountSmoother;
+    bdd::Smoother mAccelStartSmoother;
+    bdd::Smoother mAccelEndSmoother;
+    bdd::Smoother mAccelCurveSmoother;
 
     bdd::NoteStack mHeldNotes;
     bdd::Glide mGlide;
@@ -551,4 +842,28 @@ private:
     bdd::SubOscillator mSubOscillator;
     bdd::StateVariableFilter mFilter;
     bdd::ADSREnvelope mAmpEnvelope;
+
+    // Host timing, as last reported.
+    double mHostTempo = 120.0;
+    double mHostBeat = 0.0;
+    int64_t mHostSampleTime = 0;
+    bool mHostPlaying = false;
+    double mHostNumerator = 4.0;
+    double mHostDenominator = 4.0;
+
+    // Drawn envelope. The published points and scratch table belong to the editing thread; the
+    // exchange passes finished tables across; the rest belongs to the render thread.
+    std::array<bdd::CurvePoint, bdd::kMaxCurvePoints> mPublishedPoints{};
+    int mPublishedCount = 0;
+    std::array<float, bdd::kCurveTableSize> mPublishScratch{};
+    bdd::CurveExchange mCurveExchange;
+    uint32_t mObservedCurveSequence = 0;
+    std::array<float, bdd::kCurveTableSize> mIncomingTable{};
+    std::array<float, bdd::kCurveTableSize> mCurrentTable{};
+    std::array<float, bdd::kCurveTableSize> mPreviousTable{};
+    float mCurveFade = 1.0f;
+    float mCurveFadeStep = 0.001f;
+    bdd::EnvelopeClock mEnvelopeClock;
+    uint32_t mDisplayPositionBits = 0;
+    uint32_t mDisplayValueBits = 0;
 };

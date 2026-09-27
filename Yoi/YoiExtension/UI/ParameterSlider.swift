@@ -59,10 +59,12 @@ struct ParameterSlider: View {
     }
 }
 
-/// A segmented picker for an indexed parameter (a choice between named options).
+/// A picker for an indexed parameter (a choice between named options): segmented for a few
+/// options, or a drop-down menu for many.
 struct ParameterPicker: View {
     @State var param: ObservableAUParameter
     let options: [String]
+    var menu = false
 
     private var selection: Binding<Int> {
         Binding(
@@ -76,12 +78,18 @@ struct ParameterPicker: View {
     }
 
     var body: some View {
-        Picker(param.displayName, selection: selection) {
+        let picker = Picker(param.displayName, selection: selection) {
             ForEach(options.indices, id: \.self) { index in
                 Text(options[index]).tag(index)
             }
         }
-        .pickerStyle(.segmented)
+        Group {
+            if menu {
+                picker.pickerStyle(.menu)
+            } else {
+                picker.pickerStyle(.segmented)
+            }
+        }
         .accessibility(identifier: param.displayName)
         .padding()
     }

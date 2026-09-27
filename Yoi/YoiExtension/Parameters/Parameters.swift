@@ -151,6 +151,94 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             flags: logarithmic
         )
     }
+    ParameterGroupSpec(identifier: "envelope", name: "Drawn Envelope") {
+        ParameterSpec(
+            address: .envAmount,
+            identifier: "envAmount",
+            name: "Env Amount",
+            units: .octaves,
+            valueRange: 0.0...8.0,
+            defaultValue: 3.0
+        )
+        ParameterSpec(
+            address: .envTimeMode,
+            identifier: "envTimeMode",
+            name: "Env Time Mode",
+            units: .indexed,
+            valueRange: 0...1,
+            defaultValue: 0,
+            valueStrings: ["Sync", "Free"]
+        )
+        ParameterSpec(
+            address: .envSyncLength,
+            identifier: "envSyncLength",
+            name: "Env Sync",
+            units: .indexed,
+            valueRange: 0...AUValue(syncLengthNames.count - 1),
+            defaultValue: 6,
+            valueStrings: syncLengthNames
+        )
+        ParameterSpec(
+            address: .envFreeTime,
+            identifier: "envFreeTime",
+            name: "Env Free Time",
+            units: .milliseconds,
+            valueRange: 10.0...30000.0,
+            defaultValue: 500.0,
+            flags: logarithmic
+        )
+        ParameterSpec(
+            address: .envDirection,
+            identifier: "envDirection",
+            name: "Env Direction",
+            units: .indexed,
+            valueRange: 0...AUValue(directionNames.count - 1),
+            defaultValue: 0,
+            valueStrings: directionNames
+        )
+        ParameterSpec(
+            address: .envRetrigger,
+            identifier: "envRetrigger",
+            name: "Env Re-Trigger",
+            units: .boolean,
+            valueRange: 0...1,
+            defaultValue: 0
+        )
+        ParameterSpec(
+            address: .accelStart,
+            identifier: "accelStart",
+            name: "Accel Start",
+            units: .rate,
+            valueRange: 0.1...4.0,
+            defaultValue: 0.25,
+            flags: logarithmic
+        )
+        ParameterSpec(
+            address: .accelEnd,
+            identifier: "accelEnd",
+            name: "Accel End",
+            units: .rate,
+            valueRange: 0.1...4.0,
+            defaultValue: 2.0,
+            flags: logarithmic
+        )
+        ParameterSpec(
+            address: .accelCurve,
+            identifier: "accelCurve",
+            name: "Accel Curve",
+            units: .generic,
+            valueRange: -1.0...1.0,
+            defaultValue: 0.0
+        )
+    }
+}
+
+/// Option names come from the kernel, so the host and the DSP always agree on them.
+let syncLengthNames: [String] = (0..<Int(YoiExtensionDSPKernel.syncLengthCount())).map {
+    String(cString: YoiExtensionDSPKernel.syncLengthName(Int32($0)))
+}
+let directionNames: [String] = (0..<Int(YoiExtensionDSPKernel.directionCount())).map {
+    String(cString: YoiExtensionDSPKernel.directionName(Int32($0)))
 }
 
 extension ParameterSpec {
