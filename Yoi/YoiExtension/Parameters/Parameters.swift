@@ -66,7 +66,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Sub Level",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 50.0
+            defaultValue: 75.0
         )
         ParameterSpec(
             address: .subShape,
@@ -84,6 +84,15 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueRange: 0...1,
             defaultValue: 0,
             valueStrings: ["-1 Oct", "-2 Oct"]
+        )
+        ParameterSpec(
+            address: .subCrossover,
+            identifier: "subCrossover",
+            name: "Sub Crossover",
+            units: .hertz,
+            valueRange: 50.0...700.0,
+            defaultValue: 130.0,
+            flags: logarithmic
         )
     }
     ParameterGroupSpec(identifier: "filter", name: "Filter") {

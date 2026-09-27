@@ -19,12 +19,13 @@ namespace bdd {
 ///
 /// Unlike a biquad it stays stable and well-behaved while its cutoff and resonance are swept
 /// every sample, which is exactly what the drawn envelope will do to it. One `process` call
-/// yields low-pass and band-pass together.
+/// yields low-pass, band-pass and high-pass together.
 struct StateVariableFilter {
     struct Outputs {
         double lowPass;
         /// Normalised so that the peak at the cutoff sits at unity gain whatever the resonance.
         double bandPass;
+        double highPass;
     };
 
     /// Q with the resonance control at zero: a Butterworth response, flat with no peak.
@@ -65,7 +66,7 @@ struct StateVariableFilter {
         const double v2 = ic2eq + a2 * ic1eq + a3 * v3;
         ic1eq = flushDenormal(2.0 * v1 - ic1eq);
         ic2eq = flushDenormal(2.0 * v2 - ic2eq);
-        return { v2, v1 * k };
+        return { v2, v1 * k, input - k * v1 - v2 };
     }
 };
 
@@ -88,6 +89,28 @@ struct ButterworthLowPass4 {
 
     inline double process(double input) {
         return second.process(first.process(input).lowPass).lowPass;
+    }
+};
+
+/// Four-pole (24 dB per octave) Butterworth high-pass, the mirror of `ButterworthLowPass4`.
+/// With the low-pass at the same frequency it makes a crossover, as between a sub and the
+/// oscillator above it.
+struct ButterworthHighPass4 {
+    StateVariableFilter first;
+    StateVariableFilter second;
+
+    void reset() {
+        first.reset();
+        second.reset();
+    }
+
+    void setCutoff(double cutoffHertz, double sampleRate) {
+        first.setCoefficients(cutoffHertz, 0.5411961, sampleRate);
+        second.setCoefficients(cutoffHertz, 1.3065630, sampleRate);
+    }
+
+    inline double process(double input) {
+        return second.process(first.process(input).highPass).highPass;
     }
 };
 

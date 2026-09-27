@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 namespace bdd {
@@ -57,6 +58,45 @@ struct Wavefolder {
         previousInput = input;
         previousIntegral = currentIntegral;
         return output;
+    }
+};
+
+/// Keeps a shaped signal at the loudness of the signal it was made from, so a shaper changes the
+/// tone and not the volume. It follows both signals' power over `seconds` and scales the shaped
+/// one by the ratio, within `kMinimumGain`...`kMaximumGain`.
+///
+/// The follow time is long next to a bass cycle, so the gain doesn't wobble with the waveform, and
+/// short next to a phrase, so it keeps up with the filter moving.
+struct LevelMatch {
+    static constexpr double kMinimumGain = 0.125;   // -18 dB
+    static constexpr double kMaximumGain = 2.0;     // +6 dB
+    /// Below this power (about -90 dBFS) both signals count as silence and nothing is changed.
+    static constexpr double kSilence = 1.0e-9;
+
+    double sourcePower = 0.0;
+    double shapedPower = 0.0;
+    double coefficient = 0.001;
+
+    void setTimeConstant(double seconds, double sampleRate) {
+        coefficient = 1.0 - std::exp(-1.0 / std::max(1.0, seconds * sampleRate));
+    }
+
+    void reset() {
+        sourcePower = 0.0;
+        shapedPower = 0.0;
+    }
+
+    /// `shaped`, scaled to the loudness `source` has had lately.
+    inline double process(double source, double shaped) {
+        sourcePower = flushTiny(sourcePower + (source * source - sourcePower) * coefficient);
+        shapedPower = flushTiny(shapedPower + (shaped * shaped - shapedPower) * coefficient);
+        const double gain = std::sqrt((sourcePower + kSilence) / (shapedPower + kSilence));
+        return shaped * std::clamp(gain, kMinimumGain, kMaximumGain);
+    }
+
+private:
+    static double flushTiny(double value) {
+        return (value < 1.0e-30) ? 0.0 : value;
     }
 };
 

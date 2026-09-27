@@ -171,8 +171,8 @@ void testDefaultsMatchParameterTree() {
     struct Expected { AUParameterAddress address; float value; };
     const Expected expected[] = {
         { outputLevel, 0.0f }, { glideTime, 60.0f }, { glideMode, 0.0f }, { bendRange, 2.0f },
-        { oscShape, 0.0f }, { subLevel, 50.0f }, { subShape, 0.0f }, { subOctave, 0.0f },
-        { filterMode, 0.0f }, { cutoff, 800.0f }, { resonance, 30.0f },
+        { oscShape, 0.0f }, { subLevel, 75.0f }, { subShape, 0.0f }, { subOctave, 0.0f },
+        { subCrossover, 130.0f }, { filterMode, 0.0f }, { cutoff, 800.0f }, { resonance, 30.0f },
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
@@ -195,6 +195,11 @@ void testRangesClamp() {
     CHECK(kernel->getParameter(dsRate) == 1300.0f, "S&H rate should start at 1300 Hz, got %f", kernel->getParameter(dsRate));
     kernel->setParameter(dsRate, 12000.0f);
     CHECK(kernel->getParameter(dsRate) == 6000.0f, "S&H rate should stop at 6000 Hz, got %f", kernel->getParameter(dsRate));
+    // The crossover keeps the Max device's range.
+    kernel->setParameter(subCrossover, 10.0f);
+    CHECK(kernel->getParameter(subCrossover) == 50.0f, "crossover should start at 50 Hz, got %f", kernel->getParameter(subCrossover));
+    kernel->setParameter(subCrossover, 5000.0f);
+    CHECK(kernel->getParameter(subCrossover) == 700.0f, "crossover should stop at 700 Hz, got %f", kernel->getParameter(subCrossover));
 }
 
 void testParametersRoundTrip() {
@@ -203,7 +208,7 @@ void testParametersRoundTrip() {
     const Item items[] = {
         { outputLevel, -12.0f }, { glideTime, 250.0f }, { glideMode, 1.0f }, { bendRange, 12.0f },
         { oscShape, 40.0f }, { subLevel, 75.0f }, { subShape, 60.0f }, { subOctave, 1.0f },
-        { filterMode, 1.0f }, { cutoff, 1234.0f }, { resonance, 85.0f },
+        { subCrossover, 300.0f }, { filterMode, 1.0f }, { cutoff, 1234.0f }, { resonance, 85.0f },
         { ampAttack, 20.0f }, { ampDecay, 900.0f }, { ampSustain, 40.0f }, { ampRelease, 700.0f },
         { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
@@ -1093,6 +1098,84 @@ void testGritExtremesStayBounded() {
     CHECK(finite, "full fold and resonance produced a non-finite sample");
 }
 
+// MARK: - The owner's UI/UX test 1
+
+void testShapeMorphKeepsItsLevel() {
+    // Saw to square changes the tone, with no hole in the middle. With a rising saw the square's
+    // odd harmonics cancelled the saw's halfway: the fundamental all but vanished and the level
+    // fell by 10 dB.
+    auto measure = [](float shape) {
+        bdd::MorphOscillator oscillator;
+        std::vector<float> samples(size_t(frames(0.5)));
+        for (auto& sample : samples) {
+            sample = oscillator.next(55.0 / kSampleRate, shape);
+        }
+        return std::array<double, 2>{ rms(samples), energyAt(samples, 0, samples.size(), 55.0) };
+    };
+    const auto saw = measure(0.0f);
+    double quietest = 1.0;
+    double weakestFundamental = 1.0;
+    for (int step = 1; step <= 10; ++step) {
+        const auto morphed = measure(float(step) / 10.0f);
+        quietest = std::min(quietest, morphed[0] / saw[0]);
+        weakestFundamental = std::min(weakestFundamental, morphed[1] / saw[1]);
+    }
+    CHECK(20.0 * std::log10(quietest) > -1.0, "the morph dips %.1f dB below the saw", 20.0 * std::log10(quietest));
+    CHECK(20.0 * std::log10(weakestFundamental) > -1.0, "the morph loses %.1f dB of fundamental",
+          -20.0 * std::log10(weakestFundamental));
+}
+
+std::vector<float> playCrossover(float subPercent, float crossoverHertz) {
+    auto kernel = makeKernel();
+    kernel->setParameter(subLevel, subPercent);
+    kernel->setParameter(subCrossover, crossoverHertz);
+    kernel->setParameter(cutoff, 2500.0f);
+    kernel->setParameter(resonance, 0.0f);
+    kernel->noteOn(33, 100);   // A1, 55 Hz; the sub is at 27.5 Hz
+    return render(*kernel, frames(1.0));
+}
+
+void testSubCrossover() {
+    const size_t from = size_t(frames(0.3));
+    auto level = [from](const std::vector<float>& output, double frequency) {
+        return energyAt(output, from, output.size(), frequency);
+    };
+    // With the crossover above the note, the oscillator's fundamental gives way to the sub...
+    const auto open = playCrossover(100.0f, 50.0f);
+    const auto split = playCrossover(100.0f, 130.0f);
+    CHECK(level(split, 55.0) < level(open, 55.0) * 0.25, "the oscillator should give up its low end below the crossover");
+    // ...and the sub keeps it.
+    const double subChange = 20.0 * std::log10(level(split, 27.5) / level(playCrossover(100.0f, 700.0f), 27.5));
+    CHECK(std::fabs(subChange) < 1.0, "the sub below the crossover should be untouched, changed %.2f dB", subChange);
+    // With the sub off there's nothing to split, so the oscillator keeps everything.
+    CHECK(playCrossover(0.0f, 130.0f) == playCrossover(0.0f, 600.0f), "with no sub, the crossover should change nothing");
+    // The split is what stops the stacking: less low end piles up than with the oscillator open.
+    CHECK(rms(split, from) < rms(open, from), "splitting at the crossover should leave less stacked low end");
+}
+
+double foldLevel(float amount, float position, float mode) {
+    auto kernel = makeKernel();
+    kernel->setParameter(filterMode, mode);
+    kernel->setParameter(foldAmount, amount);
+    kernel->setParameter(foldPosition, position);
+    kernel->noteOn(33, 100);
+    const auto output = render(*kernel, frames(1.0));
+    return rms(output, size_t(frames(0.3)));
+}
+
+void testFoldKeepsTheLevel() {
+    // The fold adds harmonics, not volume. Before level matching, driving the quieter band-pass
+    // voice into the fold after the filter made it up to 9 dB louder.
+    for (float mode : { 0.0f, 1.0f }) {
+        const double unfolded = foldLevel(0.0f, 1.0f, mode);
+        for (float amount : { 25.0f, 50.0f, 100.0f }) {
+            const double change = 20.0 * std::log10(foldLevel(amount, 1.0f, mode) / unfolded);
+            CHECK(std::fabs(change) < 1.5, "%s, pre-downsample fold at %.0f%% changes the level by %.1f dB",
+                  mode > 0.5f ? "band-pass" : "low-pass", amount, change);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1135,6 +1218,9 @@ int main() {
     testWavefolderAntialiasing();
     testFoldInTheVoice();
     testFoldPositionSwitchIsSmooth();
+    testShapeMorphKeepsItsLevel();
+    testSubCrossover();
+    testFoldKeepsTheLevel();
     testCleanupFilter();
     testGritExtremesStayBounded();
 

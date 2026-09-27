@@ -91,9 +91,10 @@ public:
                                 &mCutoffSmoother, &mResonanceSmoother, &mFilterModeSmoother,
                                 &mOutputSmoother, &mEnvAmountSmoother, &mAccelStartSmoother,
                                 &mAccelEndSmoother, &mAccelCurveSmoother, &mFoldAmountSmoother,
-                                &mCleanupMultipleSmoother }) {
+                                &mCleanupMultipleSmoother, &mSubCrossoverSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
+        mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
         mFoldPositionBlend.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mCleanupWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mSampleHoldWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
@@ -110,7 +111,11 @@ public:
         mSampleAndHold.reset();
         mSampleCountDownsampler.reset();
         mWavefolder.reset();
+        mFoldLevel.reset();
         mCleanupFilter.reset();
+        mMainHighPass.reset();
+        mSubLowPass.reset();
+        mAppliedCrossoverOctaves = -1.0f;
         mActiveFoldPosition = mFoldPosition;
 
         mEnvelopeClock = bdd::EnvelopeClock();
@@ -157,6 +162,9 @@ public:
                 break;
             case YoiExtensionParameterAddress::subOctave:
                 mSubOctave = std::clamp(int(std::lround(value)), 0, 1);
+                break;
+            case YoiExtensionParameterAddress::subCrossover:
+                mSubCrossoverHertz = std::clamp(value, 50.0f, 700.0f);
                 break;
             case YoiExtensionParameterAddress::filterMode:
                 mFilterMode = std::clamp(int(std::lround(value)), 0, 1);
@@ -241,6 +249,7 @@ public:
             case YoiExtensionParameterAddress::subLevel: return mSubLevel * 100.0f;
             case YoiExtensionParameterAddress::subShape: return mSubShape * 100.0f;
             case YoiExtensionParameterAddress::subOctave: return AUValue(mSubOctave);
+            case YoiExtensionParameterAddress::subCrossover: return mSubCrossoverHertz;
             case YoiExtensionParameterAddress::filterMode: return AUValue(mFilterMode);
             case YoiExtensionParameterAddress::cutoff: return mCutoffHertz;
             case YoiExtensionParameterAddress::resonance: return mResonance * 100.0f;
@@ -513,6 +522,7 @@ public:
         }
 
         const double subRatio = (mSubOctave == 0) ? 0.5 : 0.25;
+        const float crossoverTarget = std::log2(mSubCrossoverHertz);
         const float cutoffTarget = std::log2(mCutoffHertz);
         const float outputTarget = bdd::decibelsToGain(mOutputDecibels);
         const float filterModeTarget = float(mFilterMode);
@@ -564,18 +574,33 @@ public:
             const float main = mMainOscillator.next(increment, mainMorph);
             const float sub = mSubOscillator.next(increment * subRatio, subMorph);
 
+            // Crossover, as in the Max device: the sub keeps the low end below X-OVER and the
+            // oscillator gives it up, so the two never stack there. With no sub there's nothing to
+            // split, so the oscillator's high-pass fades out over the bottom of the Sub Level knob.
+            const float crossoverOctaves = mSubCrossoverSmoother.next(crossoverTarget);
+            if (crossoverOctaves != mAppliedCrossoverOctaves) {
+                mAppliedCrossoverOctaves = crossoverOctaves;
+                const double crossoverHertz = std::exp2(double(crossoverOctaves));
+                mMainHighPass.setCutoff(crossoverHertz, mSampleRate);
+                mSubLowPass.setCutoff(crossoverHertz, mSampleRate);
+            }
+            const double splitDepth = std::min(1.0, double(subGain) / kCrossoverFadeLevel);
+            const double mainAboveSub = double(main) + (mMainHighPass.process(double(main)) - double(main)) * splitDepth;
+            const double subBelow = mSubLowPass.process(double(sub));
+
             // Wavefolder settings. Moving it between positions fades it out, swaps, and fades it
             // back in, so the switch never clicks.
             if (mActiveFoldPosition != mFoldPosition && mFoldPositionBlend.current <= 0.0f) {
                 mActiveFoldPosition = mFoldPosition;
                 mWavefolder.reset();
+                mFoldLevel.reset();
             }
             const double positionBlend = double(mFoldPositionBlend.next(mActiveFoldPosition == mFoldPosition ? 1.0f : 0.0f));
             const double foldDepth = double(mFoldAmountSmoother.next(mFoldAmount));
             // The oscillators at full scale, where the fold curve starts at +-1.
             const double fullScale = 1.0 + double(subGain);
 
-            double oscillators = double(main + subGain * sub);
+            double oscillators = mainAboveSub + double(subGain) * subBelow;
             if (mActiveFoldPosition == foldPreFilter) {
                 oscillators = fullScale * applyFold(oscillators / fullScale, foldDepth, positionBlend);
             }
@@ -783,6 +808,12 @@ private:
     /// (and so the Max device it was tuned in) run at. At any other rate the hold is scaled to
     /// keep the same effective rate, so a Set sounds the same whatever its sample rate.
     static constexpr double kDownsampleReferenceRate = 48000.0;
+    /// How long the fold's level matching listens before adjusting: long next to a bass cycle,
+    /// short next to a phrase.
+    static constexpr double kFoldLevelSeconds = 0.08;
+    /// Sub Level (0...1) at which the crossover is fully in; below it the oscillator's high-pass
+    /// fades out, so with the sub off the oscillator keeps all its low end.
+    static constexpr double kCrossoverFadeLevel = 0.1;
 
     void startNote(int note, bool legato) {
         const bool glides = mHasPlayed
@@ -817,8 +848,12 @@ private:
     /// Folds `x` (full scale at +-1) by `amount` 0...1, which drives it 1-10x into the fold, as the
     /// Max device's fold amount did. At 0 it returns `x` exactly; over the first 2 % it fades in, so
     /// leaving zero never jumps. `blend` fades the whole fold in and out when it changes position.
+    ///
+    /// The folded signal is kept at the loudness of what went in: the fold adds harmonics, not
+    /// volume. Without that, driving a quiet signal (a band-pass, a low cutoff) 10x into the fold
+    /// made it up to 9 dB louder.
     double applyFold(double x, double amount, double blend) {
-        const double folded = mWavefolder.process(x * (1.0 + 9.0 * amount));
+        const double folded = mFoldLevel.process(x, mWavefolder.process(x * (1.0 + 9.0 * amount)));
         const double wet = std::min(1.0, amount * 50.0) * blend;
         return (1.0 - wet) * x + wet * folded;
     }
@@ -898,6 +933,7 @@ private:
         mDownsampleWeight.snap(mDownsampleMode == downsampleCount ? 1.0f : 0.0f);
         mFoldAmountSmoother.snap(mFoldAmount);
         mCleanupMultipleSmoother.snap(std::log2(mCleanupMultiple));
+        mSubCrossoverSmoother.snap(std::log2(mSubCrossoverHertz));
         mCleanupWeight.snap(mCleanupMode != 0 ? 1.0f : 0.0f);
         mActiveFoldPosition = mFoldPosition;
         mFoldPositionBlend.snap(1.0f);
@@ -919,9 +955,10 @@ private:
     int mGlideMode = glideLegato;
     float mBendRange = 2.0f;
     float mOscShape = 0.0f;
-    float mSubLevel = 0.5f;
+    float mSubLevel = 0.75f;   // with the crossover the sub carries the low end alone; 75 % keeps the defaults at -7 dBFS
     float mSubShape = 0.0f;
     int mSubOctave = 0;
+    float mSubCrossoverHertz = 130.0f;
     int mFilterMode = 0;
     float mCutoffHertz = 800.0f;
     float mResonance = 0.3f;
@@ -973,6 +1010,8 @@ private:
     bdd::LinearRamp mFoldPositionBlend;
     bdd::Smoother mCleanupMultipleSmoother;
     bdd::LinearRamp mCleanupWeight;
+    bdd::Smoother mSubCrossoverSmoother;
+    float mAppliedCrossoverOctaves = -1.0f;
 
     bdd::NoteStack mHeldNotes;
     bdd::Glide mGlide;
@@ -985,7 +1024,10 @@ private:
     bdd::SampleAndHold mSampleAndHold;
     bdd::SampleCountDownsampler mSampleCountDownsampler;
     bdd::Wavefolder mWavefolder;
+    bdd::LevelMatch mFoldLevel;
     bdd::ButterworthLowPass4 mCleanupFilter;
+    bdd::ButterworthHighPass4 mMainHighPass;
+    bdd::ButterworthLowPass4 mSubLowPass;
 
     // Host timing, as last reported.
     double mHostTempo = 120.0;
