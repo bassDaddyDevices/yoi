@@ -54,7 +54,11 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
 
     dsMode = 70,
     dsRate = 71,
-    dsAmount = 72
+    dsAmount = 72,
+    foldAmount = 73,
+    foldPosition = 74,
+    cleanupMode = 75,
+    cleanupMultiple = 76
 };
 
 #else
@@ -101,7 +105,11 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
 
     dsMode = 70,
     dsRate = 71,
-    dsAmount = 72
+    dsAmount = 72,
+    foldAmount = 73,
+    foldPosition = 74,
+    cleanupMode = 75,
+    cleanupMultiple = 76
 };
 
 #endif

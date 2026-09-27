@@ -258,6 +258,41 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueRange: 0.0...100.0,
             defaultValue: 45.0
         )
+        ParameterSpec(
+            address: .foldAmount,
+            identifier: "foldAmount",
+            name: "Fold",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .foldPosition,
+            identifier: "foldPosition",
+            name: "Fold Position",
+            units: .indexed,
+            valueRange: 0...1,
+            defaultValue: 0,
+            valueStrings: ["Pre-filter", "Pre-downsample"]
+        )
+        ParameterSpec(
+            address: .cleanupMode,
+            identifier: "cleanupMode",
+            name: "Clean-up",
+            units: .indexed,
+            valueRange: 0...1,
+            defaultValue: 1,
+            valueStrings: ["Off", "On"]
+        )
+        ParameterSpec(
+            address: .cleanupMultiple,
+            identifier: "cleanupMultiple",
+            name: "Clean-up Multiple",
+            units: .ratio,
+            valueRange: 1.0...16.0,
+            defaultValue: 5.0,
+            flags: logarithmic
+        )
     }
 }
 

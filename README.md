@@ -17,8 +17,8 @@ Yoi/                          Xcode project (Audio Unit Extension App template)
     │   ├── YoiFactoryShapes.hpp        built-in drawings for the envelope
     │   └── Shared/                     Bass Daddy Devices building blocks, no YOI knowledge:
     │                                   oscillators, filter, ADSR, note stack, glide, the drawn
-    │                                   curve and its looping playback, the downsamplers, and a
-    │                                   holder for host blocks
+    │                                   curve and its looping playback, the downsamplers, the
+    │                                   wavefolder, and a holder for host blocks
     ├── Parameters/           parameter addresses (C) and the host-facing tree (Swift)
     └── UI/                   temporary SwiftUI slider panel, until the HTML editor
 Tests/                        C++ render tests for the kernel (CMake)

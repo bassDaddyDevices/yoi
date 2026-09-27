@@ -69,4 +69,26 @@ struct StateVariableFilter {
     }
 };
 
+/// Four-pole (24 dB per octave) Butterworth low-pass: two state-variable sections with the Qs
+/// that make the pair maximally flat. Flat up to the cutoff with no resonant bump, then steep, as
+/// a clean-up filter should be.
+struct ButterworthLowPass4 {
+    StateVariableFilter first;
+    StateVariableFilter second;
+
+    void reset() {
+        first.reset();
+        second.reset();
+    }
+
+    void setCutoff(double cutoffHertz, double sampleRate) {
+        first.setCoefficients(cutoffHertz, 0.5411961, sampleRate);
+        second.setCoefficients(cutoffHertz, 1.3065630, sampleRate);
+    }
+
+    inline double process(double input) {
+        return second.process(first.process(input).lowPass).lowPass;
+    }
+};
+
 } // namespace bdd

@@ -140,6 +140,8 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
                 return String(format: "%.2f\u{00D7}", value)
             case .boolean:
                 return value >= 0.5 ? "On" : "Off"
+            case .ratio:
+                return String(format: "\u{00D7}%.1f", value)
             case .indexed:
                 let index = Int(value.rounded())
                 if let strings = param.valueStrings, strings.indices.contains(index) {

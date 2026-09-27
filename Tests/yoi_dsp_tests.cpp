@@ -43,7 +43,7 @@ using Kernel = YoiExtensionDSPKernel;
 /// A kernel prepared the way the audio unit prepares one. Unless asked for, the drawn envelope
 /// (Amount 0) and the downsampler (Off) are taken out, so each test hears only what it is testing.
 std::unique_ptr<Kernel> makeKernel(double sampleRate = kSampleRate, bool withEnvelope = false,
-                                   bool withDownsampler = false) {
+                                   bool withDownsampler = false, bool withCleanup = false) {
     auto kernel = std::make_unique<Kernel>();
     kernel->initialize(2, sampleRate);
     if (!withEnvelope) {
@@ -51,6 +51,9 @@ std::unique_ptr<Kernel> makeKernel(double sampleRate = kSampleRate, bool withEnv
     }
     if (!withDownsampler) {
         kernel->setParameter(dsMode, 0.0f);
+    }
+    if (!withCleanup) {
+        kernel->setParameter(cleanupMode, 0.0f);
     }
     return kernel;
 }
@@ -174,6 +177,7 @@ void testDefaultsMatchParameterTree() {
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
         { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 45.0f },
+        { foldAmount, 0.0f }, { foldPosition, 0.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 5.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -193,6 +197,7 @@ void testParametersRoundTrip() {
         { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
+        { foldAmount, 35.0f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -939,6 +944,144 @@ void testDownsamplerExtremesStayBounded() {
     CHECK(finite, "downsampler extremes produced a non-finite sample");
 }
 
+// MARK: - Wavefolder and clean-up filter
+
+void testWavefolderCurve() {
+    using F = bdd::Wavefolder;
+    CHECK(std::fabs(F::fold(0.3) - 0.3) < 1e-12 && std::fabs(F::fold(-0.7) + 0.7) < 1e-12, "the fold should leave -1...1 untouched");
+    CHECK(std::fabs(F::fold(1.5) - 0.5) < 1e-12 && std::fabs(F::fold(-1.5) + 0.5) < 1e-12, "1.5 should reflect to 0.5");
+    CHECK(std::fabs(F::fold(3.0) + 1.0) < 1e-12 && std::fabs(F::fold(5.0) - 1.0) < 1e-12, "the fold should repeat every 4");
+    double worst = 0.0;
+    for (double x = -9.0; x <= 9.0; x += 0.0137) {
+        const double h = 1e-5;
+        const double slope = (F::integral(x + h) - F::integral(x - h)) / (2.0 * h);
+        worst = std::max(worst, std::fabs(slope - F::fold(x)));
+    }
+    CHECK(worst < 1e-5, "the integral's slope should be the fold curve everywhere: worst error %g", worst);
+}
+
+/// Share of a signal's power that is not at a harmonic of `fundamental`: aliasing. The window
+/// must hold a whole number of cycles, so each harmonic falls exactly on its own frequency.
+double inharmonicShare(const std::vector<float>& samples, double fundamental) {
+    double total = 0.0;
+    for (float sample : samples) {
+        total += double(sample) * double(sample);
+    }
+    total /= double(samples.size());
+    double harmonic = 0.0;
+    for (double frequency = fundamental; frequency < kSampleRate * 0.5; frequency += fundamental) {
+        const double magnitude = energyAt(samples, 0, samples.size(), frequency);
+        harmonic += 2.0 * magnitude * magnitude;   // a sinusoid's power from its normalised magnitude
+    }
+    return std::max(0.0, total - harmonic) / total;
+}
+
+void testWavefolderAntialiasing() {
+    // A 2.9 kHz sine driven 8x into the fold, over exactly 2900 cycles. Everything that isn't a
+    // harmonic of 2.9 kHz is aliasing: the fold's harmonics above Nyquist folding back.
+    auto run = [](bool antialiased) {
+        bdd::Wavefolder folder;
+        std::vector<float> output(48000);
+        for (size_t i = 0; i < output.size(); ++i) {
+            const double x = 8.0 * std::sin(2.0 * kPi * 2900.0 * double(i) / kSampleRate);
+            output[i] = float(antialiased ? folder.process(x) : bdd::Wavefolder::fold(x));
+        }
+        return output;
+    };
+    const auto naive = run(false);
+    const auto smooth = run(true);
+    const double naiveAliasing = inharmonicShare(naive, 2900.0);
+    const double smoothAliasing = inharmonicShare(smooth, 2900.0);
+    CHECK(smoothAliasing < naiveAliasing * 0.5, "anti-aliasing should at least halve the aliasing: %.2f %% against %.2f %% naive",
+          100.0 * smoothAliasing, 100.0 * naiveAliasing);
+    const double naiveThird = energyAt(naive, 0, naive.size(), 8700.0);
+    const double smoothThird = energyAt(smooth, 0, smooth.size(), 8700.0);
+    CHECK(smoothThird > naiveThird * 0.8, "anti-aliasing should keep the real 3rd harmonic: %g against %g", smoothThird, naiveThird);
+}
+
+std::vector<float> playFold(float amount, float position, float cutoffHertz, int frameCount = 24000) {
+    auto kernel = makeKernel();
+    kernel->setParameter(foldAmount, amount);
+    kernel->setParameter(foldPosition, position);
+    kernel->setParameter(cutoff, cutoffHertz);
+    kernel->setParameter(resonance, 0.0f);
+    kernel->noteOn(40, 100);
+    return render(*kernel, frameCount);
+}
+
+void testFoldInTheVoice() {
+    CHECK(playFold(0.0f, 0.0f, 800.0f) == playFold(0.0f, 1.0f, 800.0f), "at 0 %% the fold should be an exact bypass in either position");
+    // After a 150 Hz cutoff the note is close to a sine, so harmonics the fold adds stand out.
+    CHECK(brightness(playFold(60.0f, 1.0f, 150.0f), 4800) > brightness(playFold(0.0f, 1.0f, 150.0f), 4800) * 1.5,
+          "folding should add harmonics");
+    // After a low cutoff, folding pre-downsample keeps its new harmonics; pre-filter loses them.
+    CHECK(brightness(playFold(60.0f, 1.0f, 300.0f), 4800) > brightness(playFold(60.0f, 0.0f, 300.0f), 4800) * 1.5,
+          "pre-downsample folding should be brighter than pre-filter after a low cutoff");
+}
+
+void testFoldPositionSwitchIsSmooth() {
+    auto kernel = makeKernel();
+    kernel->setParameter(foldAmount, 80.0f);
+    kernel->setParameter(cutoff, 300.0f);
+    kernel->setParameter(resonance, 0.0f);
+    kernel->noteOn(40, 100);
+    const auto before = render(*kernel, frames(0.2));
+    kernel->setParameter(foldPosition, 1.0f);
+    const auto during = render(*kernel, frames(0.03));
+    const auto after = render(*kernel, frames(0.2));
+    auto largestStep = [](const std::vector<float>& samples, size_t from) {
+        float largest = 0.0f;
+        for (size_t i = std::max<size_t>(from, 1); i < samples.size(); ++i) {
+            largest = std::max(largest, std::fabs(samples[i] - samples[i - 1]));
+        }
+        return largest;
+    };
+    // Folding after the filter is brighter, so its steady steps are bigger: compare the switch
+    // with the larger of the two settled sounds.
+    const float steady = std::max(largestStep(before, frames(0.1)), largestStep(after, frames(0.1)));
+    const float switching = std::max(largestStep(during, 0), std::fabs(during[0] - before.back()));
+    CHECK(switching < steady * 1.5f, "moving the fold should fade, not jump: largest step %f against %f steady", switching, steady);
+}
+
+std::vector<float> playCleanup(float mode, float multiple) {
+    auto kernel = makeKernel(kSampleRate, false, true, true);
+    kernel->setParameter(cleanupMode, mode);
+    kernel->setParameter(cleanupMultiple, multiple);
+    kernel->setParameter(resonance, 70.0f);
+    kernel->noteOn(40, 100);
+    return render(*kernel, frames(0.5));
+}
+
+void testCleanupFilter() {
+    const auto off = playCleanup(0.0f, 5.0f);
+    const auto on = playCleanup(1.0f, 5.0f);
+    CHECK(brightness(on, frames(0.1)) < brightness(off, frames(0.1)) * 0.7, "clean-up should tame the downsampler: %f against %f",
+          brightness(on, frames(0.1)), brightness(off, frames(0.1)));
+    CHECK(brightness(playCleanup(1.0f, 2.0f), frames(0.1)) < brightness(playCleanup(1.0f, 16.0f), frames(0.1)),
+          "a smaller multiple should clean up more");
+    CHECK(playCleanup(0.0f, 2.0f) == playCleanup(0.0f, 16.0f), "with clean-up off, the multiple should change nothing");
+}
+
+void testGritExtremesStayBounded() {
+    float highest = 0.0f;
+    bool finite = true;
+    for (float position : { 0.0f, 1.0f }) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(foldAmount, 100.0f);
+        kernel->setParameter(foldPosition, position);
+        kernel->setParameter(cleanupMultiple, 1.0f);
+        kernel->setParameter(resonance, 100.0f);
+        kernel->setParameter(outputLevel, 6.0f);
+        kernel->setParameter(subLevel, 100.0f);
+        kernel->noteOn(28, 127);
+        const auto output = render(*kernel, frames(0.3));
+        highest = std::max(highest, peak(output));
+        finite = finite && allFinite(output);
+    }
+    CHECK(highest <= 1.0f, "full fold and resonance left full scale: peak %f", highest);
+    CHECK(finite, "full fold and resonance produced a non-finite sample");
+}
+
 } // namespace
 
 int main() {
@@ -976,6 +1119,12 @@ int main() {
     testDownsamplerComesAfterTheFilter();
     testDownsamplerModeSwitchSettles();
     testDownsamplerExtremesStayBounded();
+    testWavefolderCurve();
+    testWavefolderAntialiasing();
+    testFoldInTheVoice();
+    testFoldPositionSwitchIsSmooth();
+    testCleanupFilter();
+    testGritExtremesStayBounded();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

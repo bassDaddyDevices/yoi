@@ -41,6 +41,14 @@ struct YoiExtensionMainView: View {
                     ParameterSlider(param: parameterTree.grit.dsRate, logarithmic: true)
                     ParameterSlider(param: parameterTree.grit.dsAmount)
                 }
+                section("Wavefolder") {
+                    ParameterSlider(param: parameterTree.grit.foldAmount)
+                    ParameterPicker(param: parameterTree.grit.foldPosition, options: ["Pre-filter", "Pre-downsample"])
+                }
+                section("Clean-up Filter") {
+                    ParameterPicker(param: parameterTree.grit.cleanupMode, options: ["Off", "On"])
+                    ParameterSlider(param: parameterTree.grit.cleanupMultiple, logarithmic: true)
+                }
                 section("Oscillators") {
                     ParameterSlider(param: parameterTree.oscillators.oscShape)
                     ParameterSlider(param: parameterTree.oscillators.subLevel)
