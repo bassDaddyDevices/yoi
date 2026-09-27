@@ -151,4 +151,20 @@ extension ParameterTreeSpec {
     func createAUParameterTree() -> AUParameterTree {
         AUParameterTree.createTree(withChildren: self.children.createAUParameterNodes())
     }
+
+    /// Every parameter's default, by address (what an editor resets a control to).
+    var defaultValues: [AUParameterAddress: AUValue] {
+        var defaults: [AUParameterAddress: AUValue] = [:]
+        func collect(_ nodes: [NodeSpec]) {
+            for node in nodes {
+                if let parameter = node as? ParameterSpec {
+                    defaults[parameter.address] = parameter.defaultValue
+                } else if let group = node as? ParameterGroupSpec {
+                    collect(group.children)
+                }
+            }
+        }
+        collect(children)
+        return defaults
+    }
 }

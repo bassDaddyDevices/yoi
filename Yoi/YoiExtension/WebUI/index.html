@@ -4,26 +4,41 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>YOI</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="yoi.css">
 </head>
 <body>
-    <header>
-        <h1>YOI</h1>
-        <label class="shape-picker">
-            Load drawing
-            <select id="shapes"></select>
-        </label>
-        <span id="status" class="status">connecting…</span>
-    </header>
+    <!-- The panel is drawn at 940×600 and scaled to fit the window. -->
+    <div id="stage">
+        <div id="skulls" aria-hidden="true"></div>
 
-    <section class="envelope">
-        <canvas id="curve" aria-label="Drawn envelope: drag the points to reshape it"></canvas>
-    </section>
+        <header class="top">
+            <div id="logo" class="logo" role="img" aria-label="YOI"></div>
+            <div class="maker">BASS DADDY DEVICES</div>
+            <div id="badge" class="badge" hidden></div>
+        </header>
 
-    <main id="controls"></main>
+        <section class="screen" aria-label="Drawn envelope">
+            <div class="screen-bar">
+                <div id="hint" class="hint"></div>
+                <button id="drawings" class="screen-button" type="button" aria-label="Load a factory drawing"></button>
+            </div>
+            <canvas id="curve" aria-label="Drawn envelope for the filter cutoff. Click to add a point, drag to move one."></canvas>
+            <div class="screen-rule"></div>
+            <div class="strip">
+                <div class="strip-row" id="strip-time"></div>
+                <div class="strip-row" id="strip-more"></div>
+            </div>
+        </section>
 
-    <script src="bridge.js"></script>
-    <script src="standin.js"></script>
-    <script src="panel.js"></script>
+        <section id="core" class="core"></section>
+        <section id="rack" class="rack"></section>
+    </div>
+
+    <script src="bdd-bridge.js"></script>
+    <script src="bdd-pixel.js"></script>
+    <script src="bdd-controls.js"></script>
+    <script src="bdd-curve.js"></script>
+    <script src="yoi-standin.js"></script>
+    <script src="yoi-panel.js"></script>
 </body>
 </html>

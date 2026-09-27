@@ -15,10 +15,11 @@
 //      endEdit { id }             the gesture ends
 //      setCurve { points }        a new drawing, as [[x, y, bend]]
 //      loadShape { index }        load a factory drawing
+//      error { message, source, line }  a script error on the page, for the log
 //
 //  Plug-in -> page, by calling window.bdd.receive(state), where `state` has any of:
-//      descriptor                 every parameter's address, name, group, range, unit and options,
-//                                 and the factory drawing names (sent once, after hello)
+//      descriptor                 every parameter's address, name, group, range, default, unit and
+//                                 options, and the factory drawing names (sent once, after hello)
 //      params { id: value }       parameter values: all of them after hello, then only changes
 //      curve { points, table }    the drawing's points and the curve as the envelope plays it
 //      display { position, value } the envelope's playhead, about 30 times a second
@@ -141,6 +142,12 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             audioUnit.loadFactoryShape(index)
             sendCurve()
 
+        case "error":
+            let text = body["message"] as? String ?? "?"
+            let source = (body["source"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+            let line = (body["line"] as? NSNumber)?.intValue ?? 0
+            log.error("Editor script error: \(text, privacy: .public) (\(source, privacy: .public):\(line))")
+
         default:
             log.debug("Unknown editor message \(type, privacy: .public)")
         }
@@ -173,6 +180,7 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     private func sendFullState() {
         guard let audioUnit, let tree = audioUnit.parameterTree else { return }
+        let defaults = YoiExtensionParameterSpecs.defaultValues
         var values: [String: Any] = [:]
         let parameters: [[String: Any]] = tree.allParameters.map { parameter in
             values[String(parameter.address)] = parameter.value
@@ -186,6 +194,9 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 "unit": Self.unitName(parameter.unit),
                 "log": parameter.flags.contains(.flag_DisplayLogarithmic),
             ]
+            if let value = defaults[parameter.address] {
+                entry["default"] = value
+            }
             if let strings = parameter.valueStrings {
                 entry["options"] = strings
             }

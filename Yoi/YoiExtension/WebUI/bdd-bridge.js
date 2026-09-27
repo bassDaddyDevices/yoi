@@ -1,4 +1,4 @@
-// bridge.js
+// bdd-bridge.js
 // Bass Daddy Devices plug-in bridge: how an editor page talks to the plug-in hosting it.
 //
 // The page never talks to a plug-in format directly. It calls the functions on `window.bdd`, and
@@ -23,7 +23,19 @@
         }
     }
 
-    window.bdd = {
+    // Errors on the page go to the plug-in's log too; inside a host there's no console to see.
+    window.addEventListener('error', (event) => {
+        if (webkit) {
+            webkit.postMessage({ type: 'error', message: String(event.message), source: String(event.filename || ''), line: event.lineno || 0 });
+        }
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+        if (webkit) {
+            webkit.postMessage({ type: 'error', message: String(event.reason), source: '', line: 0 });
+        }
+    });
+
+    const api = {
         /** True inside a plug-in, false in a plain browser. */
         get connected() {
             return Boolean(webkit);
@@ -71,4 +83,7 @@
             post({ type: 'loadShape', index });
         },
     };
+
+    // The other bdd-*.js files hang their parts off the same object, whatever order they load in.
+    window.bdd = Object.defineProperties(window.bdd || {}, Object.getOwnPropertyDescriptors(api));
 })();

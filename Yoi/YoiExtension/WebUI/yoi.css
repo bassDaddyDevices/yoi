@@ -1,0 +1,460 @@
+/* yoi.css
+   YOI's funky 8-bit look, after the concept mock-up: a cyan panel with grey pixel skulls, a
+   black screen with a bright yellow line, and chunky coloured knobs with thick black rims.
+   The .knob, .switch, .readout and .menu rules style the shared bdd-controls.js parts; a new
+   synth copies them and changes the colours. */
+
+:root {
+    --panel: #72cedc;          /* the mock-up's cyan */
+    --panel-dark: #4fb2c2;
+    --skull: #626468;
+    --ink: #0b0b0b;
+    --screen: #000000;
+    --screen-line: #f5e27a;    /* the envelope line */
+    --screen-dim: #8c8146;
+    --screen-faint: #4a4428;
+    --halo: #72cedc;           /* behind black text that sits on a skull */
+
+    --blue: #2e86f0;
+    --pink: #ec2c8f;
+    --yellow: #ffd21a;
+    --orange: #ff7b22;
+    --green: #36d17a;
+    --purple: #9a6bff;
+    --coral: #ff5a5f;
+    --cream: #f6f1e4;
+
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", Helvetica, Arial, "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--panel-dark);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* MARK: Stage */
+
+#stage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 940px;
+    height: 600px;
+    transform-origin: 0 0;
+    overflow: hidden;
+    background-color: var(--panel);
+    /* A faint paper grain, as on the mock-up. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.09 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+    display: grid;
+    grid-template-columns: 520px 1fr;
+    grid-template-rows: 40px 336px 1fr;
+    column-gap: 20px;
+    row-gap: 10px;
+    padding: 12px 16px 12px;
+}
+
+#skulls {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    color: var(--skull);
+}
+
+#skulls svg {
+    position: absolute;
+}
+
+.top, .screen, .core, .rack {
+    position: relative;   /* above the skulls */
+}
+
+/* MARK: Header */
+
+.top {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.logo {
+    color: var(--yellow);
+    filter: drop-shadow(3px 3px 0 var(--ink));
+    line-height: 0;
+}
+
+.logo svg + svg {
+    margin-left: 0;
+}
+
+.maker {
+    color: var(--ink);
+    line-height: 0;
+    margin-top: 6px;
+}
+
+.badge {
+    margin-left: auto;
+    background: var(--ink);
+    color: var(--screen-line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    line-height: 0;
+}
+
+/* MARK: Screen */
+
+.screen {
+    grid-row: 2;
+    grid-column: 1;
+    background: var(--screen);
+    border-radius: 18px;
+    padding: 8px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    box-shadow:
+        0 0 0 3px var(--ink),
+        4px 6px 0 3px rgba(0, 0, 0, 0.22),
+        inset 0 0 22px rgba(245, 226, 122, 0.07);
+}
+
+.screen-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 18px;
+    padding: 0 2px;
+}
+
+.hint {
+    font: 700 9.5px/1 var(--mono);
+    letter-spacing: 0.03em;
+    color: var(--screen-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.screen-button {
+    background: none;
+    border: 0;
+    padding: 3px 4px;
+    margin-right: -4px;
+    color: var(--screen-dim);
+    line-height: 0;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.screen-button:hover, .screen-button:focus-visible {
+    color: var(--screen-line);
+    outline: none;
+}
+
+#curve {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    display: block;
+    touch-action: none;
+    cursor: crosshair;
+}
+
+.screen-rule {
+    height: 2px;
+    margin: 4px 2px 9px;
+    background: var(--screen-line);
+    opacity: 0.85;
+}
+
+.strip {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 0 2px;
+}
+
+.strip-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    min-height: 14px;
+}
+
+.strip-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: opacity 120ms;
+}
+
+.strip-text {
+    color: var(--screen-dim);
+    line-height: 0;
+}
+
+/* MARK: Screen readouts (bdd-controls readout) */
+
+.readout {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    line-height: 0;
+    padding: 3px 4px;
+    margin: -3px -4px;
+    border-radius: 4px;
+    cursor: ns-resize;
+    outline: none;
+    transition: opacity 120ms;
+}
+
+.readout.clickable {
+    cursor: pointer;
+}
+
+.readout-name {
+    color: var(--screen-dim);
+}
+
+.readout-value {
+    color: var(--screen-line);
+}
+
+.readout:hover, .readout.held, .readout:focus-visible {
+    background: var(--screen-faint);
+}
+
+.readout:hover .readout-name, .readout.held .readout-name {
+    color: var(--screen-line);
+}
+
+/* MARK: Clusters of knobs */
+
+.core {
+    grid-row: 2;
+    grid-column: 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.rack {
+    grid-row: 3;
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-top: 12px;
+}
+
+.group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.group-title {
+    color: var(--ink);
+    line-height: 0;
+    padding: 0 2px 2px;
+    filter: drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 1px var(--halo));
+}
+
+.group-body {
+    display: grid;
+    grid-auto-flow: row;
+    row-gap: 6px;
+    justify-items: center;
+}
+
+.core-row {
+    display: flex;
+    align-items: flex-start;
+}
+
+/* MARK: Knobs (bdd-controls knob) */
+
+.knob {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    cursor: ns-resize;
+    outline: none;
+    border-radius: 12px;
+    transition: opacity 120ms;
+    touch-action: none;
+}
+
+.knob svg {
+    display: block;
+    overflow: visible;
+}
+
+.knob-label {
+    font-family: var(--sans);
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    fill: var(--ink);
+    paint-order: stroke;
+    stroke: var(--halo);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+
+.knob-body {
+    stroke: var(--ink);
+    transition: filter 100ms;
+}
+
+.knob-shadow {
+    fill: rgba(0, 0, 0, 0.22);
+}
+
+.knob-shine {
+    fill: rgba(255, 255, 255, 0.28);
+}
+
+.knob-pointer {
+    stroke: var(--ink);
+    stroke-linecap: round;
+}
+
+.knob:hover .knob-body, .knob.held .knob-body {
+    filter: brightness(1.08) saturate(1.1);
+}
+
+.knob:focus-visible svg {
+    outline: 2px dashed var(--ink);
+    outline-offset: 2px;
+    border-radius: 50%;
+}
+
+.knob-value {
+    font: 700 10.5px/1 var(--mono);
+    color: var(--screen-line);
+    background: var(--ink);
+    border-radius: 5px;
+    padding: 3px 6px 3px;
+    min-width: 58px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* MARK: Switches (bdd-controls segmented) */
+
+.switch {
+    --switch-color: var(--yellow);
+    display: inline-flex;
+    border: 3px solid var(--ink);
+    border-radius: 999px;
+    overflow: hidden;
+    background: #bdeaf1;
+    box-shadow: 2px 3px 0 rgba(0, 0, 0, 0.22);
+    transition: opacity 120ms;
+}
+
+.switch button {
+    border: 0;
+    background: none;
+    padding: 3px 9px 3px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.switch button + button {
+    border-left: 2px solid var(--ink);
+}
+
+.switch button:hover {
+    background: #d9f4f8;
+}
+
+.switch button.selected {
+    background: var(--switch-color);
+}
+
+.switch button:focus-visible {
+    outline: 2px dashed var(--ink);
+    outline-offset: -4px;
+}
+
+/* A control that does nothing with the current settings: still usable, just quieter. Knobs
+   lose their colour rather than turning see-through, so the skulls don't show through them. */
+.dim {
+    opacity: 0.4;
+}
+
+.knob.dim {
+    opacity: 0.75;
+}
+
+.knob.dim .knob-body {
+    filter: saturate(0.15) brightness(0.9);
+}
+
+.knob.dim .knob-value {
+    color: var(--screen-dim);
+}
+
+/* MARK: Menu (bdd-controls openMenu) */
+
+.menu {
+    position: absolute;
+    z-index: 10;
+    display: grid;
+    gap: 2px;
+    padding: 6px;
+    background: var(--screen);
+    border: 2px solid var(--screen-line);
+    border-radius: 8px;
+    box-shadow: 4px 5px 0 rgba(0, 0, 0, 0.35);
+}
+
+.menu-item {
+    border: 0;
+    background: none;
+    color: var(--screen-dim);
+    padding: 5px 8px;
+    border-radius: 4px;
+    line-height: 0;
+    text-align: left;
+    cursor: pointer;
+}
+
+.menu-item.selected {
+    color: var(--screen-line);
+}
+
+.menu-item:hover, .menu-item:focus-visible {
+    background: var(--screen-line);
+    color: var(--ink);
+    outline: none;
+}
