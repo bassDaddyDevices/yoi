@@ -162,7 +162,7 @@ public:
                 mFilterMode = std::clamp(int(std::lround(value)), 0, 1);
                 break;
             case YoiExtensionParameterAddress::cutoff:
-                mCutoffHertz = std::clamp(value, 20.0f, 20000.0f);
+                mCutoffHertz = std::clamp(value, 20.0f, 2500.0f);
                 break;
             case YoiExtensionParameterAddress::resonance:
                 mResonance = std::clamp(value * 0.01f, 0.0f, 1.0f);
@@ -210,7 +210,7 @@ public:
                 mDownsampleMode = std::clamp(int(std::lround(value)), 0, 2);
                 break;
             case YoiExtensionParameterAddress::dsRate:
-                mSampleHoldRate = std::clamp(value, 200.0f, 12000.0f);
+                mSampleHoldRate = std::clamp(value, 1300.0f, 6000.0f);
                 break;
             case YoiExtensionParameterAddress::dsAmount:
                 mDownsampleAmount = std::clamp(value, 0.0f, 100.0f);

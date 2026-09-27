@@ -101,7 +101,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             identifier: "cutoff",
             name: "Cutoff",
             units: .hertz,
-            valueRange: 20.0...20000.0,
+            valueRange: 20.0...2500.0,
             defaultValue: 800.0,
             flags: logarithmic
         )
@@ -246,7 +246,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             identifier: "dsRate",
             name: "S&H Rate",
             units: .hertz,
-            valueRange: 200.0...12000.0,
+            valueRange: 1300.0...6000.0,
             defaultValue: 1400.0,
             flags: logarithmic
         )

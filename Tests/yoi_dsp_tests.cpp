@@ -186,6 +186,17 @@ void testDefaultsMatchParameterTree() {
     }
 }
 
+void testRangesClamp() {
+    // The owner's ranges: the filter only needs to reach 2500 Hz, and S&H lives at 1300-6000 Hz.
+    auto kernel = makeKernel();
+    kernel->setParameter(cutoff, 20000.0f);
+    CHECK(kernel->getParameter(cutoff) == 2500.0f, "cutoff should stop at 2500 Hz, got %f", kernel->getParameter(cutoff));
+    kernel->setParameter(dsRate, 200.0f);
+    CHECK(kernel->getParameter(dsRate) == 1300.0f, "S&H rate should start at 1300 Hz, got %f", kernel->getParameter(dsRate));
+    kernel->setParameter(dsRate, 12000.0f);
+    CHECK(kernel->getParameter(dsRate) == 6000.0f, "S&H rate should stop at 6000 Hz, got %f", kernel->getParameter(dsRate));
+}
+
 void testParametersRoundTrip() {
     auto kernel = makeKernel();
     struct Item { AUParameterAddress address; float value; };
@@ -383,7 +394,7 @@ void testSubOscillatorOctaves() {
         auto kernel = makeKernel();
         kernel->setParameter(subLevel, level);
         kernel->setParameter(subOctave, octave);
-        kernel->setParameter(cutoff, 20000.0f);
+        kernel->setParameter(cutoff, 2500.0f);
         kernel->setParameter(resonance, 0.0f);
         kernel->noteOn(45, 100);   // 110 Hz
         const auto output = render(*kernel, frames(1.0));
@@ -411,7 +422,7 @@ void testCutoffDarkensTheSound() {
         }
         return rms(difference, frames(0.1)) / std::max(1e-9, rms(output, frames(0.1)));
     };
-    CHECK(brightness(200.0f, 0.0f) < brightness(5000.0f, 0.0f) * 0.5, "low-pass cutoff barely changes the tone");
+    CHECK(brightness(200.0f, 0.0f) < brightness(2500.0f, 0.0f) * 0.5, "low-pass cutoff barely changes the tone");
     CHECK(brightness(2000.0f, 1.0f) > brightness(2000.0f, 0.0f), "band-pass is not brighter than low-pass at the same cutoff");
 }
 
@@ -427,7 +438,7 @@ void testExtremesStayBoundedAndFinite() {
 
     float highest = 0.0f;
     bool finite = true;
-    for (float hertz : { 20.0f, 55.0f, 110.0f, 440.0f, 3000.0f, 20000.0f }) {
+    for (float hertz : { 20.0f, 55.0f, 110.0f, 440.0f, 1200.0f, 2500.0f }) {
         kernel->setParameter(cutoff, hertz);
         for (float mode : { 0.0f, 1.0f }) {
             kernel->setParameter(filterMode, mode);
@@ -687,7 +698,7 @@ void testEnvelopeMovesTheCutoff() {
     auto play = [](float level, float amount) {
         auto kernel = makeKernel(kSampleRate, true);
         kernel->setParameter(subLevel, 0.0f);
-        kernel->setParameter(cutoff, 3000.0f);
+        kernel->setParameter(cutoff, 2500.0f);
         kernel->setParameter(envAmount, amount);
         setFlatDrawing(*kernel, level);
         render(*kernel, 256);   // taken up while silent, so there is no crossfade to hear
@@ -747,7 +758,7 @@ void testEnvelopeExtremesStayBounded() {
     auto kernel = makeKernel(kSampleRate, true, true);
     kernel->setParameter(outputLevel, 6.0f);
     kernel->setParameter(resonance, 100.0f);
-    kernel->setParameter(cutoff, 20000.0f);
+    kernel->setParameter(cutoff, 2500.0f);
     kernel->setParameter(envAmount, 8.0f);
     kernel->setParameter(envTimeMode, 1.0f);
     kernel->setParameter(envFreeTime, 10.0f);
@@ -930,7 +941,7 @@ void testDownsamplerExtremesStayBounded() {
         for (float setting : { 0.0f, 1.0f }) {
             auto kernel = makeKernel(kSampleRate, true, true);
             kernel->setParameter(dsMode, mode);
-            kernel->setParameter(dsRate, setting == 0.0f ? 200.0f : 12000.0f);
+            kernel->setParameter(dsRate, setting == 0.0f ? 1300.0f : 6000.0f);
             kernel->setParameter(dsAmount, setting == 0.0f ? 100.0f : 0.0f);
             kernel->setParameter(resonance, 100.0f);
             kernel->setParameter(outputLevel, 6.0f);
@@ -1087,6 +1098,7 @@ void testGritExtremesStayBounded() {
 int main() {
     testDefaultsMatchParameterTree();
     testParametersRoundTrip();
+    testRangesClamp();
     testSilentWithoutNotes();
     testNotePlaysAndReleasesToSilence();
     testAllNotesOffAndAllSoundOff();
