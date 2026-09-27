@@ -20,7 +20,10 @@ Yoi/                          Xcode project (Audio Unit Extension App template)
     │                                   curve and its looping playback, the downsamplers, the
     │                                   wavefolder, and a holder for host blocks
     ├── Parameters/           parameter addresses (C) and the host-facing tree (Swift)
-    └── UI/                   temporary SwiftUI slider panel, until the HTML editor
+    ├── UI/                   WebEditor.swift (hosts the HTML editor and bridges it to the audio
+    │                         unit), plus the SwiftUI slider panel kept as a fallback
+    └── WebUI/                the editor: index.html, style.css, bridge.js (reusable plug-in
+                              bridge), panel.js, standin.js (browser stand-in for the plug-in)
 Tests/                        C++ render tests for the kernel (CMake)
 ```
 
@@ -34,6 +37,16 @@ From the command line:
 xcodebuild -project Yoi/Yoi.xcodeproj -scheme Yoi build   # build, signed with the team in the project
 auval -v aumu yoi1 Bsdd                                  # validate once the app has run or been built
 ```
+
+## Working on the editor
+
+The editor is a plain web page in `Yoi/YoiExtension/WebUI`. To work on it without a host, serve that folder and open it in a browser; `standin.js` plays the plug-in's part:
+
+```sh
+python3 -m http.server 8765 --bind 127.0.0.1 --directory Yoi/YoiExtension/WebUI
+```
+
+The stand-in's parameter list is a snapshot of the real plug-in's; regenerate it when parameters change. It joins drawing points with straight lines, because the real curve is worked out by the plug-in's C++. Inside a host, debug builds let Safari's Develop menu inspect the page.
 
 ## Tests
 

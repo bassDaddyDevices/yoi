@@ -17,6 +17,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     var audioUnit: AUAudioUnit?
     
     var hostingController: HostingController<YoiExtensionMainView>?
+
+    /// The HTML editor. The SwiftUI slider panel is kept as a fallback: set `useWebEditor` to
+    /// false to get it back, for example if a host can't show the web view.
+    var webEditor: WebEditor?
+    static let useWebEditor = true
+    static let editorSize = NSSize(width: 760, height: 540)
     
     private var observation: NSKeyValueObservation?
 
@@ -49,10 +55,25 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 	*/
 
 	deinit {
+        let editor = webEditor
+        Task { @MainActor in
+            editor?.invalidate()
+        }
 	}
+
+    public override func viewWillAppear() {
+        super.viewWillAppear()
+        webEditor?.resume()
+    }
+
+    public override func viewDidDisappear() {
+        super.viewDidDisappear()
+        webEditor?.pause()
+    }
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        preferredContentSize = Self.editorSize
         
         // Accessing the `audioUnit` parameter prompts the AU to be created via createAudioUnit(with:)
         guard let audioUnit = self.audioUnit else {
@@ -102,6 +123,10 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             host.removeFromParent()
             host.view.removeFromSuperview()
         }
+        if Self.useWebEditor, let yoi = audioUnit as? YoiExtensionAudioUnit {
+            configureWebEditor(audioUnit: yoi)
+            return
+        }
         
         guard let observableParameterTree = audioUnit.observableParameterTree else {
             return
@@ -122,5 +147,22 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         host.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor).isActive = true
         self.view.bringSubviewToFront(host.view)
     }
-    
+
+    private func configureWebEditor(audioUnit: YoiExtensionAudioUnit) {
+        webEditor?.invalidate()
+        webEditor?.webView.removeFromSuperview()
+
+        let editor = WebEditor(audioUnit: audioUnit)
+        let webView = editor.webView
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        webEditor = editor
+        preferredContentSize = Self.editorSize
+    }
 }

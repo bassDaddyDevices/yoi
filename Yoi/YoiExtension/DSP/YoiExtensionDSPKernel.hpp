@@ -420,12 +420,12 @@ public:
 
     /// Where the envelope was reading in the drawing (0...1) and the value it read, at the end of
     /// the last block. For the editor's playhead; safe to call from any thread.
-    float envelopeDisplayPosition() {
-        return std::bit_cast<float>(bdd::atomics::loadRelaxed(mDisplayPositionBits));
+    float envelopeDisplayPosition() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayPositionBits)));
     }
 
-    float envelopeDisplayValue() {
-        return std::bit_cast<float>(bdd::atomics::loadRelaxed(mDisplayValueBits));
+    float envelopeDisplayValue() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayValueBits)));
     }
 
 #if YOI_AUDIO_UNIT

@@ -58,21 +58,11 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				README.md,
 			);
 			target = 72169F8F3068693000E8AE81 /* YoiExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
-/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-		72169FBE3068693000E8AE81 /* Exceptions for "YoiExtension" folder in "Copy Bundle Resources" phase from "YoiExtension" target */ = {
-			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
-			buildPhase = 72169F8E3068693000E8AE81 /* Resources */;
-			membershipExceptions = (
-				Common/DSP/YoiExtensionAUProcessHelper.hpp,
-				DSP/YoiExtensionDSPKernel.hpp,
-			);
-		};
-/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		72169F583068692E00E8AE81 /* Yoi */ = {
@@ -94,7 +84,6 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				72169FBA3068693000E8AE81 /* Exceptions for "YoiExtension" folder in "YoiExtension" target */,
-				72169FBE3068693000E8AE81 /* Exceptions for "YoiExtension" folder in "Copy Bundle Resources" phase from "YoiExtension" target */,
 			);
 			path = YoiExtension;
 			sourceTree = "<group>";
@@ -355,6 +344,7 @@
 				DEVELOPMENT_TEAM = Z427P979RG;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = YoiExtension/Info.plist;
@@ -400,6 +390,7 @@
 				DEVELOPMENT_TEAM = Z427P979RG;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = YoiExtension/Info.plist;

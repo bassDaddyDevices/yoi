@@ -172,6 +172,28 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         curveLock.lock()
         defer { curveLock.unlock() }
         kernel.loadFactoryShape(Int32(index))
+        curveRevision &+= 1
+    }
+
+    /// Goes up by one whenever the drawing changes, from any source (editor, factory shape, state
+    /// restore), so an editor can tell when to redraw.
+    private(set) var curveRevision = 0
+
+    /// The drawing as the envelope plays it, sampled at `count` points across 0...1. Editors draw
+    /// this rather than working out the curve themselves.
+    func envelopeTable(count: Int) -> [Float] {
+        var table = [Float](repeating: 0, count: max(2, count))
+        curveLock.lock()
+        defer { curveLock.unlock() }
+        table.withUnsafeMutableBufferPointer { buffer in
+            kernel.copyEnvelopeTable(buffer.baseAddress, Int32(buffer.count))
+        }
+        return table
+    }
+
+    /// Where the envelope is reading in the drawing (0...1) and what it read, for a playhead.
+    var envelopeDisplay: (position: Float, value: Float) {
+        (kernel.envelopeDisplayPosition(), kernel.envelopeDisplayValue())
     }
 
     /// The drawing as points of `[x, y, bend]`: x and y are 0...1, bend is -1...1. Setting it
@@ -192,6 +214,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             curveLock.lock()
             defer { curveLock.unlock() }
             kernel.setEnvelopeCurve(xs, ys, bends, Int32(newValue.count))
+            curveRevision &+= 1
         }
     }
 
