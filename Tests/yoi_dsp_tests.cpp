@@ -177,7 +177,8 @@ void testDefaultsMatchParameterTree() {
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
         { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 45.0f },
-        { foldAmount, 0.0f }, { foldPosition, 0.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 5.0f },
+        { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 5.0f },
+        { boostAmount, 0.0f }, { ottDepth, 0.0f }, { widthAmount, 0.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -214,6 +215,7 @@ void testParametersRoundTrip() {
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
         { foldAmount, 35.0f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
+        { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -878,6 +880,7 @@ void testSampleCountDownsampler() {
 std::vector<float> playThroughDownsampler(float mode, double sampleRate = kSampleRate) {
     auto kernel = makeKernel(sampleRate, false, true);
     kernel->setParameter(dsMode, mode);
+    kernel->setParameter(subLevel, 0.0f);   // the sub joins after the downsampler, over its steps
     kernel->noteOn(40, 100);
     return render(*kernel, frames(0.5, sampleRate));
 }
@@ -929,6 +932,7 @@ void testDownsamplerComesAfterTheFilter() {
 void testDownsamplerModeSwitchSettles() {
     auto kernel = makeKernel(kSampleRate, false, true);
     kernel->setParameter(dsMode, 0.0f);
+    kernel->setParameter(subLevel, 0.0f);   // the sub joins after the downsampler, over its steps
     kernel->noteOn(40, 100);
     render(*kernel, frames(0.2));
     kernel->setParameter(dsMode, 1.0f);
@@ -1176,6 +1180,177 @@ void testFoldKeepsTheLevel() {
     }
 }
 
+// MARK: - The owner's UI/UX test 2: the new signal flow
+
+/// Renders both channels of a held note. The `render` helper insists the channels match, which
+/// they no longer do once Width is up.
+std::array<std::vector<float>, 2> renderStereo(Kernel& kernel, int frameCount) {
+    std::array<std::vector<float>, 2> output;
+    std::vector<float> left(256), right(256);
+    float* pointers[2] = { left.data(), right.data() };
+    for (int start = 0; start < frameCount; start += 256) {
+        const int count = std::min(256, frameCount - start);
+        kernel.process(std::span<float*>(pointers, 2), 0, uint32_t(count));
+        output[0].insert(output[0].end(), left.begin(), left.begin() + count);
+        output[1].insert(output[1].end(), right.begin(), right.begin() + count);
+    }
+    return output;
+}
+
+void testSubSkipsTheFilter() {
+    // The sub now takes its own path around the filter and grit: a band-pass or a closed low-pass
+    // no longer touches it.
+    auto subEnergy = [](float mode, float hertz) {
+        auto kernel = makeKernel(kSampleRate, false, true, true);
+        kernel->setParameter(filterMode, mode);
+        kernel->setParameter(cutoff, hertz);
+        kernel->setParameter(subLevel, 100.0f);
+        kernel->noteOn(33, 100);   // the sub is at 27.5 Hz
+        const auto output = render(*kernel, frames(1.0));
+        return energyAt(output, size_t(frames(0.3)), output.size(), 27.5);
+    };
+    const double open = subEnergy(0.0f, 2500.0f);
+    for (const auto& [mode, hertz] : { std::pair{ 1.0f, 2500.0f }, std::pair{ 0.0f, 20.0f }, std::pair{ 1.0f, 300.0f } }) {
+        const double change = 20.0 * std::log10(subEnergy(mode, hertz) / open);
+        CHECK(std::fabs(change) < 0.5, "the sub should skip the filter, but %s at %.0f Hz changed it by %.1f dB",
+              mode > 0.5f ? "band-pass" : "low-pass", hertz, change);
+    }
+}
+
+std::vector<float> playFoldAt(float amount, float position) {
+    auto kernel = makeKernel();
+    kernel->setParameter(subLevel, 0.0f);
+    kernel->setParameter(oscShape, 100.0f);   // a square: odd harmonics only
+    kernel->setParameter(cutoff, 150.0f);     // and mostly just its fundamental
+    kernel->setParameter(resonance, 0.0f);
+    kernel->setParameter(foldAmount, amount);
+    kernel->setParameter(foldPosition, position);
+    kernel->noteOn(40, 100);
+    return render(*kernel, frames(1.0));
+}
+
+void testPostDownsampleFold() {
+    CHECK(playFoldAt(0.0f, 2.0f) == playFoldAt(0.0f, 0.0f), "at 0 %% the post-downsample fold should be an exact bypass");
+
+    const double f0 = noteHertz(40);
+    const size_t from = size_t(frames(0.3));
+    auto evenShare = [&](const std::vector<float>& output) {
+        return energyAt(output, from, output.size(), 2.0 * f0) / energyAt(output, from, output.size(), f0);
+    };
+    // A symmetric fold of a near-sine makes odd harmonics only; the uneven one adds even ones.
+    const auto uneven = playFoldAt(60.0f, 2.0f);
+    const auto even = playFoldAt(60.0f, 1.0f);
+    CHECK(evenShare(uneven) > evenShare(even) * 5.0, "the post-downsample fold should add even harmonics: %.4f against %.4f",
+          evenShare(uneven), evenShare(even));
+    double sum = 0.0;
+    for (size_t index = from; index < uneven.size(); ++index) {
+        sum += uneven[index];
+    }
+    CHECK(std::fabs(sum / double(uneven.size() - from)) < 0.002, "the uneven fold should leave no DC: mean %f",
+          sum / double(uneven.size() - from));
+}
+
+void testHarmonicBooster() {
+    auto play = [](float amount) {
+        auto kernel = makeKernel();
+        kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(cutoff, 2500.0f);
+        kernel->setParameter(resonance, 0.0f);
+        kernel->setParameter(boostAmount, amount);
+        kernel->noteOn(40, 100);
+        return render(*kernel, frames(1.0));
+    };
+    const auto off = play(0.0f);
+    const auto on = play(100.0f);
+    const double f0 = noteHertz(40);
+    const size_t from = size_t(frames(0.3));
+    auto third = [&](const std::vector<float>& output) {
+        return energyAt(output, from, output.size(), 3.0 * f0) / energyAt(output, from, output.size(), 2.0 * f0);
+    };
+    CHECK(third(on) > third(off) * 2.0, "the booster should lift the 3rd harmonic against the 2nd: %.3f against %.3f",
+          third(on), third(off));
+    const double change = 20.0 * std::log10(rms(on, from) / rms(off, from));
+    CHECK(std::fabs(change) < 1.5, "the booster should be level-matched, but changed the level by %.1f dB", change);
+}
+
+void testOttEvensOutTheLevel() {
+    // The drawn envelope swings the cutoff, and so the level. The compressor should narrow the
+    // swing (loud parts down, quiet parts up), bring the quiet top end forward, and keep the
+    // overall level about where it was.
+    struct Result { double swing, brightness, level; float highest; };
+    auto measure = [](float depth) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(envAmount, 6.0f);
+        kernel->setParameter(envTimeMode, 1.0f);    // Free, so the drawing moves without a host
+        kernel->setParameter(envFreeTime, 400.0f);
+        kernel->setParameter(ottDepth, depth);
+        kernel->noteOn(40, 100);
+        const auto output = render(*kernel, frames(2.0));
+        const size_t from = size_t(frames(0.3));
+        double quietest = 1e9, loudest = -1e9;
+        for (size_t start = from; start + size_t(frames(0.05)) < output.size(); start += size_t(frames(0.05))) {
+            const double level = 20.0 * std::log10(rms(output, start, start + size_t(frames(0.05))) + 1e-9);
+            quietest = std::min(quietest, level);
+            loudest = std::max(loudest, level);
+        }
+        return Result{ loudest - quietest, 20.0 * std::log10(brightness(output, from)),
+                       20.0 * std::log10(rms(output, from)), peak(output) };
+    };
+    const auto dry = measure(0.0f);
+    const auto squashed = measure(100.0f);
+    CHECK(squashed.swing < dry.swing - 1.0, "OTT should narrow the level swing: %.1f dB against %.1f dB", squashed.swing, dry.swing);
+    CHECK(squashed.brightness > dry.brightness + 2.0, "OTT should bring the top end forward: %.1f dB against %.1f dB",
+          squashed.brightness, dry.brightness);
+    CHECK(std::fabs(squashed.level - dry.level) < 2.0, "OTT's make-up should keep the level: %.1f dB against %.1f dB",
+          squashed.level, dry.level);
+    CHECK(squashed.highest <= 1.0f, "OTT's output should stay inside full scale: peak %f", squashed.highest);
+}
+
+void testWidthIsMonoCompatible() {
+    auto play = [](float width) {
+        auto kernel = makeKernel();
+        kernel->setParameter(widthAmount, width);
+        kernel->noteOn(45, 100);
+        return renderStereo(*kernel, frames(0.5));
+    };
+    const auto narrow = play(0.0f);
+    const auto wide = play(100.0f);
+    CHECK(narrow[0] == narrow[1], "at 0 width, left and right should be identical");
+    double difference = 0.0, sumError = 0.0;
+    for (size_t index = 0; index < wide[0].size(); ++index) {
+        difference = std::max(difference, double(std::fabs(wide[0][index] - wide[1][index])));
+        const double mono = 0.5 * (double(wide[0][index]) + double(wide[1][index]));
+        sumError = std::max(sumError, std::fabs(mono - double(narrow[0][index])));
+    }
+    CHECK(difference > 0.01, "full width should make left and right differ, largest difference %f", difference);
+    CHECK(sumError < 1.0e-5, "left + right should sum back to the mono sound exactly, error %g", sumError);
+}
+
+void testFinishExtremesStayBounded() {
+    float highest = 0.0f;
+    bool finite = true;
+    for (float position : { 0.0f, 1.0f, 2.0f }) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(foldAmount, 100.0f);
+        kernel->setParameter(foldPosition, position);
+        kernel->setParameter(boostAmount, 100.0f);
+        kernel->setParameter(ottDepth, 100.0f);
+        kernel->setParameter(widthAmount, 100.0f);
+        kernel->setParameter(resonance, 100.0f);
+        kernel->setParameter(subLevel, 100.0f);
+        kernel->setParameter(outputLevel, 6.0f);
+        kernel->noteOn(28, 127);
+        const auto output = renderStereo(*kernel, frames(0.5));
+        for (const auto& channel : output) {
+            highest = std::max(highest, peak(channel));
+            finite = finite && allFinite(channel);
+        }
+    }
+    CHECK(highest <= 1.0f, "everything at full left full scale: peak %f", highest);
+    CHECK(finite, "everything at full produced a non-finite sample");
+}
+
 } // namespace
 
 int main() {
@@ -1221,6 +1396,12 @@ int main() {
     testShapeMorphKeepsItsLevel();
     testSubCrossover();
     testFoldKeepsTheLevel();
+    testSubSkipsTheFilter();
+    testPostDownsampleFold();
+    testHarmonicBooster();
+    testOttEvensOutTheLevel();
+    testWidthIsMonoCompatible();
+    testFinishExtremesStayBounded();
     testCleanupFilter();
     testGritExtremesStayBounded();
 

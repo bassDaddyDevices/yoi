@@ -280,9 +280,9 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             identifier: "foldPosition",
             name: "Fold Position",
             units: .indexed,
-            valueRange: 0...1,
-            defaultValue: 0,
-            valueStrings: ["Pre-filter", "Pre-downsample"]
+            valueRange: 0...2,
+            defaultValue: 2,
+            valueStrings: ["Pre-filter", "Pre-downsample", "Post-downsample"]
         )
         ParameterSpec(
             address: .cleanupMode,
@@ -301,6 +301,32 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueRange: 1.0...16.0,
             defaultValue: 5.0,
             flags: logarithmic
+        )
+    }
+    ParameterGroupSpec(identifier: "finish", name: "Finish") {
+        ParameterSpec(
+            address: .boostAmount,
+            identifier: "boostAmount",
+            name: "Harmonic Boost",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .ottDepth,
+            identifier: "ottDepth",
+            name: "OTT",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .widthAmount,
+            identifier: "widthAmount",
+            name: "Width",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
         )
     }
 }

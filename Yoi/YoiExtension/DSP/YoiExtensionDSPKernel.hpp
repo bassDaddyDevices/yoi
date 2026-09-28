@@ -33,12 +33,14 @@
 #include "Shared/BDDDrawnCurve.hpp"
 #include "Shared/BDDDownsamplers.hpp"
 #include "Shared/BDDDrawnEnvelope.hpp"
+#include "Shared/BDDDynamics.hpp"
 #include "Shared/BDDEnvelopes.hpp"
 #include "Shared/BDDFilters.hpp"
 #include "Shared/BDDMath.hpp"
 #include "Shared/BDDMonoVoice.hpp"
 #include "Shared/BDDOscillators.hpp"
 #include "Shared/BDDShapers.hpp"
+#include "Shared/BDDSpatial.hpp"
 
 /*
  YoiExtensionDSPKernel
@@ -46,12 +48,15 @@
  YOI's single voice. Signal flow per sample:
 
      held keys -> newest key -> glide + pitch bend -> pitch
-     pitch -> main oscillator (saw <-> square) ----------------------------+
-           -> sub oscillator (sine <-> triangle, one or two octaves down) --+-> mix
-     mix -> [wavefolder, pre-filter] -> state-variable filter (low-pass or band-pass)
+     pitch -> main oscillator (saw <-> square) -> high-pass at X-OVER
+         -> [wavefolder, pre-filter] -> state-variable filter (low-pass or band-pass)
          -> [wavefolder, pre-downsample] -> downsampler (S&H or Downsample)
-         -> clean-up low-pass (a multiple of the moving cutoff) -> amp envelope
-         -> output level -> soft limiter -> every output channel
+         -> [wavefolder, post-downsample, uneven] -> clean-up low-pass (a multiple of the moving
+            cutoff) -> harmonic booster -> amp envelope -> OTT-style compressor
+         -> dimension expander (mono in, stereo out) --------------------------------+
+     pitch -> sub oscillator (sine <-> triangle, one or two octaves down)            |
+         -> low-pass at X-OVER -> amp envelope (the sub skips everything above) -----+-> merge
+     merge -> output level -> soft limiter -> left and right
 
      drawn envelope: clock (Sync to the host, or Free) -> direction -> read the drawing (0...1)
          -> filter cutoff = CUTOFF lowered by Amount x (1 - drawing), in octaves
@@ -91,10 +96,16 @@ public:
                                 &mCutoffSmoother, &mResonanceSmoother, &mFilterModeSmoother,
                                 &mOutputSmoother, &mEnvAmountSmoother, &mAccelStartSmoother,
                                 &mAccelEndSmoother, &mAccelCurveSmoother, &mFoldAmountSmoother,
-                                &mCleanupMultipleSmoother, &mSubCrossoverSmoother }) {
+                                &mCleanupMultipleSmoother, &mSubCrossoverSmoother, &mBoostSmoother,
+                                &mOttDepthSmoother, &mWidthSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
+        mBoostLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
+        mFoldDC.setSampleRate(inSampleRate);
+        mOtt.setSampleRate(inSampleRate);
+        mOttWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
+        mDimension.setSampleRate(inSampleRate);
         mFoldPositionBlend.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mCleanupWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mSampleHoldWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
@@ -115,6 +126,7 @@ public:
         mCleanupFilter.reset();
         mMainHighPass.reset();
         mSubLowPass.reset();
+        resetFinish();
         mAppliedCrossoverOctaves = -1.0f;
         mActiveFoldPosition = mFoldPosition;
 
@@ -227,7 +239,16 @@ public:
                 mFoldAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 break;
             case YoiExtensionParameterAddress::foldPosition:
-                mFoldPosition = std::clamp(int(std::lround(value)), 0, 1);
+                mFoldPosition = std::clamp(int(std::lround(value)), 0, 2);
+                break;
+            case YoiExtensionParameterAddress::boostAmount:
+                mBoostAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                break;
+            case YoiExtensionParameterAddress::ottDepth:
+                mOttDepth = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                break;
+            case YoiExtensionParameterAddress::widthAmount:
+                mWidthAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 break;
             case YoiExtensionParameterAddress::cleanupMode:
                 mCleanupMode = std::clamp(int(std::lround(value)), 0, 1);
@@ -271,6 +292,9 @@ public:
             case YoiExtensionParameterAddress::dsAmount: return mDownsampleAmount;
             case YoiExtensionParameterAddress::foldAmount: return mFoldAmount * 100.0f;
             case YoiExtensionParameterAddress::foldPosition: return AUValue(mFoldPosition);
+            case YoiExtensionParameterAddress::boostAmount: return mBoostAmount * 100.0f;
+            case YoiExtensionParameterAddress::ottDepth: return mOttDepth * 100.0f;
+            case YoiExtensionParameterAddress::widthAmount: return mWidthAmount * 100.0f;
             case YoiExtensionParameterAddress::cleanupMode: return AUValue(mCleanupMode);
             case YoiExtensionParameterAddress::cleanupMultiple: return mCleanupMultiple;
             default: return 0.f;
@@ -300,7 +324,7 @@ public:
     enum DownsampleMode : int { downsampleOff = 0, downsampleSampleHold = 1, downsampleCount = 2 };
 
     /// Where the wavefolder sits, as stored in the `foldPosition` parameter.
-    enum FoldPosition : int { foldPreFilter = 0, foldPreDownsample = 1 };
+    enum FoldPosition : int { foldPreFilter = 0, foldPreDownsample = 1, foldPostDownsample = 2 };
 
     /// A key went down. Velocity is accepted for the future but does not shape the sound yet.
     void noteOn(int note, int velocity) {
@@ -594,17 +618,17 @@ public:
                 mActiveFoldPosition = mFoldPosition;
                 mWavefolder.reset();
                 mFoldLevel.reset();
+                mFoldDC.reset();
             }
             const double positionBlend = double(mFoldPositionBlend.next(mActiveFoldPosition == mFoldPosition ? 1.0f : 0.0f));
             const double foldDepth = double(mFoldAmountSmoother.next(mFoldAmount));
-            // The oscillators at full scale, where the fold curve starts at +-1.
-            const double fullScale = 1.0 + double(subGain);
-
-            double oscillators = mainAboveSub + double(subGain) * subBelow;
+            // Only the main oscillator goes through the filter and grit; the sub takes its own clean
+            // path and joins at the end. The oscillator is at full scale, where the fold starts.
+            double oscillator = mainAboveSub;
             if (mActiveFoldPosition == foldPreFilter) {
-                oscillators = fullScale * applyFold(oscillators / fullScale, foldDepth, positionBlend);
+                oscillator = applyFold(oscillator, foldDepth, positionBlend);
             }
-            const double mix = kOscillatorHeadroom * oscillators;
+            const double mix = kOscillatorHeadroom * oscillator;
 
             // The top of the drawing is the CUTOFF setting; the bottom is Amount octaves below it.
             const double modulatedOctaves = double(cutoffOctaves) - double(envAmount) * (1.0 - double(drawing));
@@ -614,8 +638,7 @@ public:
             const auto filtered = mFilter.process(mix);
             double filteredVoice = filtered.lowPass + (filtered.bandPass - filtered.lowPass) * double(bandPassAmount);
             if (mActiveFoldPosition == foldPreDownsample) {
-                const double scale = kOscillatorHeadroom * fullScale;
-                filteredVoice = scale * applyFold(filteredVoice / scale, foldDepth, positionBlend);
+                filteredVoice = kOscillatorHeadroom * applyFold(filteredVoice / kOscillatorHeadroom, foldDepth, positionBlend);
             }
             const float voice = float(filteredVoice);
 
@@ -628,22 +651,57 @@ public:
             // Weights that sum to 1, so a fully selected mode passes its output exactly (a held
             // step stays perfectly flat) rather than rebuilding it from the unheld signal.
             const float dryAmount = 1.0f - sampleHoldAmount - downsampleAmount;
-            const float gritty = dryAmount * voice + sampleHoldAmount * sampledAndHeld + downsampleAmount * downsampled;
+            double gritty = double(dryAmount * voice + sampleHoldAmount * sampledAndHeld + downsampleAmount * downsampled);
+
+            // Folding after the downsampler shapes the filtered note and its downsampled grit
+            // together, unevenly, which bonds the grit onto the note.
+            if (mActiveFoldPosition == foldPostDownsample) {
+                gritty = kOscillatorHeadroom * applyUnevenFold(gritty / kOscillatorHeadroom, foldDepth, positionBlend);
+            }
 
             // Clean-up low-pass: a multiple of wherever the filter cutoff is right now, so it
             // follows the drawn envelope, taming the harshest of the downsampler's images.
             const double cleanupMultiplier = std::exp2(double(mCleanupMultipleSmoother.next(cleanupMultipleTarget)));
             mCleanupFilter.setCutoff(std::min(std::exp2(modulatedOctaves) * cleanupMultiplier, 0.45 * mSampleRate),
                                      mSampleRate);
-            const double cleaned = mCleanupFilter.process(double(gritty));
+            const double cleaned = mCleanupFilter.process(gritty);
             const double cleanupAmount = double(mCleanupWeight.next(cleanupTarget));
-            const double tamed = (1.0 - cleanupAmount) * double(gritty) + cleanupAmount * cleaned;
+            const double tamed = (1.0 - cleanupAmount) * gritty + cleanupAmount * cleaned;
+
+            // Harmonic booster: peaks at 3, 5 and 7 x the note, level-matched, so it brings the
+            // pitch forward through the grit without making it louder.
+            const double boost = double(mBoostSmoother.next(mBoostAmount));
+            mHarmonicBooster.setFundamental(bdd::noteToHertz(pitch), mSampleRate);
+            const double boosted = mHarmonicBooster.process(tamed, boost);
+            const double brightened = (boost > 0.0) ? mBoostLevel.process(tamed, boosted) : tamed;
 
             const double amp = mAmpEnvelope.next();
-            const float sample = bdd::softLimit(float(tamed * amp) * outputGain);
+            const double top = brightened * amp;
 
-            for (auto* buffer : outputBuffers) {
-                buffer[frameIndex] = sample;
+            // OTT-style compression on everything but the sub. Its crossover is in the path only
+            // while it's in use, faded in and out so turning it on or off never clicks.
+            const double ottDepth = double(mOttDepthSmoother.next(mOttDepth));
+            const double ottWeight = double(mOttWeight.next(mOttDepth > 0.0f ? 1.0f : 0.0f));
+            double compressed = top;
+            if (ottWeight > 0.0) {
+                const double makeup = std::exp2(ottDepth * kOttMakeupDecibels / 6.020599913);
+                compressed = top + ottWeight * (mOtt.process(top, ottDepth) * makeup - top);
+            }
+
+            // Width, then the sub back in, in the middle.
+            const auto stereo = mDimension.process(compressed, double(mWidthSmoother.next(mWidthAmount)));
+            const double subVoice = kOscillatorHeadroom * double(subGain) * subBelow * amp;
+            const float left = bdd::softLimit(float((stereo.left + subVoice) * double(outputGain)));
+            const float right = bdd::softLimit(float((stereo.right + subVoice) * double(outputGain)));
+
+            if (outputBuffers.size() == 1) {
+                outputBuffers[0][frameIndex] = bdd::softLimit(float((compressed + subVoice) * double(outputGain)));
+            } else {
+                outputBuffers[0][frameIndex] = left;
+                outputBuffers[1][frameIndex] = right;
+                for (size_t channel = 2; channel < outputBuffers.size(); ++channel) {
+                    outputBuffers[channel][frameIndex] = 0.5f * (left + right);
+                }
             }
         }
 
@@ -814,6 +872,14 @@ private:
     /// Sub Level (0...1) at which the crossover is fully in; below it the oscillator's high-pass
     /// fades out, so with the sub off the oscillator keeps all its low end.
     static constexpr double kCrossoverFadeLevel = 0.1;
+    /// The offset the post-downsample fold adds before folding and takes away after, which folds
+    /// the two halves of the wave differently (the owner's Max experiment used 0.15).
+    static constexpr double kFoldAsymmetry = 0.15;
+    /// Make-up gain for the OTT-style compressor at full depth. Its downward stage pulls the loud
+    /// low band down (5 to 7 dB overall at full depth); this puts the level back, so turning OTT
+    /// up adds density and bite rather than a change in level. Measured on the default sound,
+    /// where full depth then stays within 0.3 dB and peaks just under the limiter's knee.
+    static constexpr double kOttMakeupDecibels = 5.0;
 
     void startNote(int note, bool legato) {
         const bool glides = mHasPlayed
@@ -836,6 +902,7 @@ private:
                 mSubOscillator.reset();
                 mSampleAndHold.reset();
                 mSampleCountDownsampler.reset();
+                resetFinish();
             }
             mAmpEnvelope.gateOn();
 
@@ -856,6 +923,27 @@ private:
         const double folded = mFoldLevel.process(x, mWavefolder.process(x * (1.0 + 9.0 * amount)));
         const double wet = std::min(1.0, amount * 50.0) * blend;
         return (1.0 - wet) * x + wet * folded;
+    }
+
+    /// The post-downsample fold: as `applyFold`, but offset by `kFoldAsymmetry` before folding
+    /// and back after, so the top and bottom of the wave fold differently and add even harmonics.
+    /// The DC the uneven fold leaves is filtered out.
+    double applyUnevenFold(double x, double amount, double blend) {
+        const double driven = x * (1.0 + 9.0 * amount) + kFoldAsymmetry;
+        const double folded = mFoldDC.process(mWavefolder.process(driven) - kFoldAsymmetry);
+        const double matched = mFoldLevel.process(x, folded);
+        const double wet = std::min(1.0, amount * 50.0) * blend;
+        return (1.0 - wet) * x + wet * matched;
+    }
+
+    /// Clears everything after the amp envelope and the stages that remember past audio, so a note
+    /// from silence doesn't start with the tail of the last one.
+    void resetFinish() {
+        mHarmonicBooster.reset();
+        mBoostLevel.reset();
+        mFoldDC.reset();
+        mOtt.reset();
+        mDimension.reset();
     }
 
     /// Recalculates amp envelope coefficients when their settings have changed. Runs on the
@@ -934,6 +1022,10 @@ private:
         mFoldAmountSmoother.snap(mFoldAmount);
         mCleanupMultipleSmoother.snap(std::log2(mCleanupMultiple));
         mSubCrossoverSmoother.snap(std::log2(mSubCrossoverHertz));
+        mBoostSmoother.snap(mBoostAmount);
+        mOttDepthSmoother.snap(mOttDepth);
+        mOttWeight.snap(mOttDepth > 0.0f ? 1.0f : 0.0f);
+        mWidthSmoother.snap(mWidthAmount);
         mCleanupWeight.snap(mCleanupMode != 0 ? 1.0f : 0.0f);
         mActiveFoldPosition = mFoldPosition;
         mFoldPositionBlend.snap(1.0f);
@@ -979,10 +1071,13 @@ private:
     float mSampleHoldRate = 1400.0f;
     float mDownsampleAmount = 45.0f;
     float mFoldAmount = 0.0f;
-    int mFoldPosition = foldPreFilter;
-    int mActiveFoldPosition = foldPreFilter;
+    int mFoldPosition = foldPostDownsample;
+    int mActiveFoldPosition = foldPostDownsample;
     int mCleanupMode = 1;
     float mCleanupMultiple = 5.0f;
+    float mBoostAmount = 0.0f;
+    float mOttDepth = 0.0f;
+    float mWidthAmount = 0.0f;
 
     float mBendPosition = 0.0f;
 
@@ -1011,6 +1106,10 @@ private:
     bdd::Smoother mCleanupMultipleSmoother;
     bdd::LinearRamp mCleanupWeight;
     bdd::Smoother mSubCrossoverSmoother;
+    bdd::Smoother mBoostSmoother;
+    bdd::Smoother mOttDepthSmoother;
+    bdd::LinearRamp mOttWeight;
+    bdd::Smoother mWidthSmoother;
     float mAppliedCrossoverOctaves = -1.0f;
 
     bdd::NoteStack mHeldNotes;
@@ -1028,6 +1127,11 @@ private:
     bdd::ButterworthLowPass4 mCleanupFilter;
     bdd::ButterworthHighPass4 mMainHighPass;
     bdd::ButterworthLowPass4 mSubLowPass;
+    bdd::DCBlocker mFoldDC;
+    bdd::HarmonicBooster mHarmonicBooster;
+    bdd::LevelMatch mBoostLevel;
+    bdd::MultibandCompressor mOtt;
+    bdd::DimensionExpander mDimension;
 
     // Host timing, as last reported.
     double mHostTempo = 120.0;

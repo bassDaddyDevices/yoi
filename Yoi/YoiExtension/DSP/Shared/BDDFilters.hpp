@@ -8,6 +8,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "BDDMath.hpp"
@@ -89,6 +90,103 @@ struct ButterworthLowPass4 {
 
     inline double process(double input) {
         return second.process(first.process(input).lowPass).lowPass;
+    }
+};
+
+/// Removes DC with a one-pole high-pass at about 10 Hz: far below any note, fast enough to catch
+/// the offset an uneven waveshaper leaves behind.
+struct DCBlocker {
+    double previousInput = 0.0;
+    double previousOutput = 0.0;
+    double pole = 0.9987;
+
+    void reset() {
+        previousInput = 0.0;
+        previousOutput = 0.0;
+    }
+
+    void setSampleRate(double sampleRate, double cornerHertz = 10.0) {
+        pole = std::exp(-kTwoPi * cornerHertz / sampleRate);
+    }
+
+    inline double process(double input) {
+        const double output = input - previousInput + pole * previousOutput;
+        previousInput = input;
+        previousOutput = flushDenormal(output);
+        return previousOutput;
+    }
+};
+
+/// One band edge of a Linkwitz-Riley crossover: 4-pole low- and high-pass outputs at the same
+/// frequency (each two Butterworth 2-pole sections), which sum back to an all-pass response.
+struct LinkwitzRileySplit {
+    StateVariableFilter low1, low2, high1, high2;
+
+    void reset() {
+        low1.reset();
+        low2.reset();
+        high1.reset();
+        high2.reset();
+    }
+
+    void setFrequency(double hertz, double sampleRate) {
+        for (auto* section : { &low1, &low2, &high1, &high2 }) {
+            section->setCoefficients(hertz, StateVariableFilter::kMinimumQ, sampleRate);
+        }
+    }
+
+    struct Bands {
+        double low;
+        double high;
+    };
+
+    inline Bands process(double input) {
+        return { low2.process(low1.process(input).lowPass).lowPass,
+                 high2.process(high1.process(input).highPass).highPass };
+    }
+};
+
+/// Boosts the odd harmonics of the note that's playing: bell-shaped peaks at 3, 5 and 7 times
+/// its frequency, which move with the pitch (glide, bend). After a downsampler, most of what's
+/// added is off-pitch; lifting the note's real harmonics brings the pitch back through the grit.
+struct HarmonicBooster {
+    static constexpr int kCount = 3;
+    static constexpr double kMultiples[kCount] = { 3.0, 5.0, 7.0 };
+    /// Wide enough that a glide doesn't whistle, narrow enough to pick out one harmonic.
+    static constexpr double kQ = 4.0;
+    /// Peak gain at full amount: +12 dB.
+    static constexpr double kMaximumGain = 3.0;   // added to the dry signal, so 1 + 3 = 4x
+
+    std::array<StateVariableFilter, kCount> bells{};
+    double appliedFrequency = -1.0;
+
+    void reset() {
+        for (auto& bell : bells) {
+            bell.reset();
+        }
+        appliedFrequency = -1.0;
+    }
+
+    /// `fundamentalHertz` is the note's frequency; peaks above 0.45 x the sample rate are pinned
+    /// just below it.
+    void setFundamental(double fundamentalHertz, double sampleRate) {
+        if (fundamentalHertz == appliedFrequency) {
+            return;
+        }
+        appliedFrequency = fundamentalHertz;
+        for (int i = 0; i < kCount; ++i) {
+            const double hertz = std::min(fundamentalHertz * kMultiples[i], 0.45 * sampleRate);
+            bells[size_t(i)].setCoefficients(hertz, kQ, sampleRate);
+        }
+    }
+
+    /// `amount` 0...1. At 0 the input comes back exactly.
+    inline double process(double input, double amount) {
+        double boosted = input;
+        for (auto& bell : bells) {
+            boosted += amount * kMaximumGain * bell.process(input).bandPass;
+        }
+        return boosted;
     }
 };
 

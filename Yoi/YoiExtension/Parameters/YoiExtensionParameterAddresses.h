@@ -9,7 +9,8 @@
 //
 //      0-9    output         10-19  voice          20-29  oscillators
 //      30-39  filter         40-49  amp envelope   50-69  drawn envelope
-//      70-89  grit           90-99  vowel (stage 4)
+//      70-79  grit           80-89  finish (booster, OTT, width)
+//      90-99  reserved (was vowel, stage 4, dropped from V1)
 //
 //  Once YOI ships, existing addresses must never be renumbered: hosts save automation by
 //  address, not by name, and the VST3 build uses the same numbers as its parameter IDs.
@@ -59,7 +60,11 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
     foldAmount = 73,
     foldPosition = 74,
     cleanupMode = 75,
-    cleanupMultiple = 76
+    cleanupMultiple = 76,
+
+    boostAmount = 80,
+    ottDepth = 81,
+    widthAmount = 82
 };
 
 #else
@@ -111,7 +116,11 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
     foldAmount = 73,
     foldPosition = 74,
     cleanupMode = 75,
-    cleanupMultiple = 76
+    cleanupMultiple = 76,
+
+    boostAmount = 80,
+    ottDepth = 81,
+    widthAmount = 82
 };
 
 #endif
