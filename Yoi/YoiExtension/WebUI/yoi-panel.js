@@ -8,7 +8,7 @@
 (function () {
     'use strict';
 
-    const { knob, slider, tabs, segmented, readout, format, openMenu } = bdd.controls;
+    const { knob, tabs, segmented, readout, format, openMenu } = bdd.controls;
     const STAGE_WIDTH = 940;
     const STAGE_HEIGHT = 410;
 
@@ -30,9 +30,10 @@
     const CREAM = 'var(--cream)';
 
     /**
-     * The pages beside the screen, picked with the tabs above them. Each knob page is a 3 × 2
-     * grid; a switch sits under the knob it belongs to (`column` is a CSS grid column).
-     * A knob with two `ids` is one knob that shows whichever parameter its switch has selected.
+     * The pages beside the screen, picked with the tabs above them. Each page is a 3 × 2 grid;
+     * a switch sits under the knob it belongs to (`column` is a CSS grid column), and `null`
+     * leaves a slot empty. A knob with two `ids` is one knob that shows whichever parameter its
+     * switch has selected.
      */
     const PAGES = [
         {
@@ -53,9 +54,11 @@
                         { id: 'foldAmount', label: 'FOLD', color: ORANGE },
                     ],
                     switches: [
-                        { id: 'dsMode', labels: ['OFF', 'kHz', '%'], color: YELLOW, column: '1' },
+                        // No OFF on the panel (the owner's call); the host can still set it.
+                        { id: 'dsMode', labels: ['kHz', '%'], values: [1, 2], color: YELLOW, column: '1' },
                         { id: 'cleanupMode', labels: ['OFF', 'ON'], color: YELLOW, column: '2' },
-                        { id: 'foldPosition', labels: ['PRE-FILT', 'PRE-DS'], color: ORANGE, column: '3' },
+                        // Before the filter, before the downsampler, after it (uneven).
+                        { id: 'foldPosition', labels: ['FILT', 'PRE', 'POST'], color: ORANGE, column: '3' },
                     ],
                 },
             ],
@@ -82,20 +85,26 @@
             ],
         },
         {
-            name: 'AMP',
-            sliders: [
-                { id: 'ampAttack', label: 'ATTACK', color: PURPLE },
-                { id: 'ampDecay', label: 'DECAY', color: PURPLE },
-                { id: 'ampSustain', label: 'SUSTAIN', color: PURPLE },
-                { id: 'ampRelease', label: 'RELEASE', color: PURPLE },
+            // The amp envelope isn't on the panel: its defaults suit YOI, and the drawn envelope
+            // does the moving. Its parameters are still there for the host.
+            name: 'FX',
+            rows: [
+                {
+                    knobs: [
+                        { id: 'boostAmount', label: 'BOOST', color: PURPLE },
+                        { id: 'ottDepth', label: 'OTT', color: PURPLE },
+                        { id: 'widthAmount', label: 'WIDTH', color: PURPLE },
+                    ],
+                },
+                {
+                    knobs: [null, { id: 'outputLevel', label: 'LEVEL', color: CREAM }, null],
+                },
             ],
-            knobs: [{ id: 'outputLevel', label: 'LEVEL', color: CREAM }],
         },
     ];
 
     const KNOB_SIZE = 64;
     const COLUMN_WIDTH = 122;
-    const SLIDER_HEIGHT = 196;
 
     /** Directions as the mock-up shows them ("DIR: <-->"), short on the screen, long in the menu. */
     const DIRECTIONS = [
@@ -172,6 +181,9 @@
         grid.style.gridTemplateColumns = `repeat(3, ${COLUMN_WIDTH}px)`;
         page.rows.forEach((row, rowIndex) => {
             row.knobs.forEach((item, columnIndex) => {
+                if (!item) {
+                    return;
+                }
                 const cell = document.createElement('div');
                 cell.className = 'page-cell';
                 cell.style.gridColumn = String(columnIndex + 1);
@@ -191,6 +203,7 @@
                 }
                 const control = segmented(parameter, {
                     labels: item.labels,
+                    values: item.values,
                     color: item.color,
                     onChange: changed(item.id),
                 });
@@ -203,35 +216,6 @@
         container.appendChild(grid);
     }
 
-    function buildSliderPage(page, container) {
-        const row = document.createElement('div');
-        row.className = 'page-sliders';
-        const faders = document.createElement('div');
-        faders.className = 'slider-group';
-        for (const item of page.sliders) {
-            const parameter = parameters.get(item.id);
-            if (!parameter) {
-                continue;
-            }
-            const control = slider(parameter, {
-                label: item.label,
-                color: item.color,
-                height: SLIDER_HEIGHT,
-                onChange: changed(item.id),
-            });
-            faders.appendChild(control.element);
-            register(item.id, control);
-        }
-        row.appendChild(faders);
-        for (const item of page.knobs || []) {
-            const element = makeKnob(item.id, item);
-            if (element) {
-                row.appendChild(element);
-            }
-        }
-        container.appendChild(row);
-    }
-
     let selectedPage = 0;
 
     function buildSide() {
@@ -242,11 +226,7 @@
             panel.className = 'page';
             panel.setAttribute('role', 'tabpanel');
             panel.setAttribute('aria-label', page.name);
-            if (page.rows) {
-                buildKnobPage(page, panel);
-            } else {
-                buildSliderPage(page, panel);
-            }
+            buildKnobPage(page, panel);
             return panel;
         });
         const show = (index) => {

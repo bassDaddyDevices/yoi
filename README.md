@@ -44,7 +44,7 @@ auval -v aumu yoi1 Bsdd                                  # validate once the app
 
 ## Working on the editor
 
-The editor is a plain web page in `Yoi/YoiExtension/WebUI`, drawn at 940×410 and scaled to fit the window: the drawing screen, and beside it three pages of controls (YOI, OSC, AMP) picked with tabs. To work on it without a host, serve that folder and open it in a browser; `yoi-standin.js` plays the plug-in's part:
+The editor is a plain web page in `Yoi/YoiExtension/WebUI`, drawn at 940×410 and scaled to fit the window: the drawing screen, and beside it three pages of controls (YOI, OSC, FX) picked with tabs. To work on it without a host, serve that folder and open it in a browser; `yoi-standin.js` plays the plug-in's part:
 
 ```sh
 python3 -m http.server 8765 --bind 127.0.0.1 --directory Yoi/YoiExtension/WebUI
@@ -58,7 +58,7 @@ Tools/update-standin.sh
 
 The stand-in only approximates bent segments, because the real curve is worked out by the plug-in's C++; inside a host the screen always shows the plug-in's own curve. Debug builds let Safari's Develop menu inspect the page inside a host, and script errors on the page are written to the extension's log (subsystem `com.bassdaddydevices.YoiExtension`, category `WebEditor`).
 
-Drawing on the screen works like Max's `function`: click to add a point, drag to move, shift-click (or double-click) to delete, option-drag to bend a segment, and hold ⌘ while dragging to snap. Knobs and the amp faders drag up and down (shift for fine), scroll, take the arrow keys, and reset on double-click. The yellow values under the screen drag like Max number boxes; click one to flip it or pick from its menu.
+Drawing on the screen works like Max's `function`: click to add a point, drag to move, shift-click (or double-click) to delete, option-drag to bend a segment, and hold ⌘ while dragging to snap. Knobs drag up and down (shift for fine), scroll, take the arrow keys, and reset on double-click. The yellow values under the screen drag like Max number boxes; click one to flip it or pick from its menu.
 
 ## Tests
 

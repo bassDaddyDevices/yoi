@@ -82,6 +82,12 @@
         loadShape(index) {
             post({ type: 'loadShape', index });
         },
+
+        /** Called by the plug-in to check the page is alive (after its window has been hidden a
+         *  while, for example); the page answers straight away. */
+        ping(token) {
+            post({ type: 'pong', token });
+        },
     };
 
     // The other bdd-*.js files hang their parts off the same object, whatever order they load in.

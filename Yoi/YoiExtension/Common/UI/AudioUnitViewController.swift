@@ -150,17 +150,17 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
     private func configureWebEditor(audioUnit: YoiExtensionAudioUnit) {
         webEditor?.invalidate()
-        webEditor?.webView.removeFromSuperview()
+        webEditor?.view.removeFromSuperview()
 
         let editor = WebEditor(audioUnit: audioUnit)
-        let webView = editor.webView
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(webView)
+        let editorView = editor.view
+        editorView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(editorView)
         NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            editorView.topAnchor.constraint(equalTo: view.topAnchor),
+            editorView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            editorView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            editorView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         webEditor = editor
         preferredContentSize = Self.editorSize

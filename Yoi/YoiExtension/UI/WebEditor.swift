@@ -16,6 +16,7 @@
 //      setCurve { points }        a new drawing, as [[x, y, bend]]
 //      loadShape { index }        load a factory drawing
 //      error { message, source, line }  a script error on the page, for the log
+//      pong { token }             the answer to window.bdd.ping(token): the page is alive
 //
 //  Plug-in -> page, by calling window.bdd.receive(state), where `state` has any of:
 //      descriptor                 every parameter's address, name, group, range, default, unit and
@@ -38,12 +39,21 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private static let updateInterval: TimeInterval = 1.0 / 30.0
 
     let webView: WKWebView
+    /// What the view controller shows: the web view inside a view that reports when it becomes
+    /// visible or hidden, whatever the reason (see `EditorHostView`).
+    let view: EditorHostView
     private weak var audioUnit: YoiExtensionAudioUnit?
     private var observerToken: AUParameterObserverToken?
     private var changedAddresses = Set<AUParameterAddress>()
     private var timer: Timer?
     private var pageReady = false
     private var sentCurveRevision = -1
+    private var isVisible = false
+    /// The ping the page hasn't answered yet, if any.
+    private var pendingPing: Int?
+    private var pingCounter = 0
+    /// How long the page has to answer a ping before it's reloaded.
+    private static let pingTimeout: TimeInterval = 1.5
 
     init(audioUnit: YoiExtensionAudioUnit) {
         self.audioUnit = audioUnit
@@ -52,7 +62,11 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let contentController = WKUserContentController()
         configuration.userContentController = contentController
         webView = WKWebView(frame: .zero, configuration: configuration)
+        view = EditorHostView(webView: webView)
         super.init()
+        view.onVisibilityChange = { [weak self] visible in
+            self?.setVisible(visible)
+        }
 
         // The content controller keeps its handlers alive, so hand it a weak stand-in to avoid a
         // cycle that would keep this editor (and the page) around after the window closes.
@@ -91,6 +105,50 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
+    // MARK: - Staying alive
+
+    /// Hosts don't always tell the view controller when its window comes back (Live, after the
+    /// window had been hidden a long time, never did), and WebKit suspends the page of a view
+    /// hidden for several minutes. So the editor watches its own visibility, and each time it is
+    /// shown it checks that the page answers; a page that doesn't is reloaded, and restores
+    /// itself from the plug-in when it says hello.
+    private func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible {
+            resume()
+            checkPageIsAlive()
+        } else {
+            pause()
+        }
+    }
+
+    private func checkPageIsAlive() {
+        // A page still loading will say hello when it's ready; only a loaded page is pinged.
+        guard pageReady else { return }
+        pingCounter += 1
+        let token = pingCounter
+        pendingPing = token
+        webView.evaluateJavaScript("window.bdd && window.bdd.ping && window.bdd.ping(\(token))", completionHandler: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pingTimeout) { [weak self] in
+            guard let self, self.pendingPing == token, self.isVisible else { return }
+            log.error("Editor page didn't answer; reloading it")
+            self.reloadPage()
+        }
+    }
+
+    private func reloadPage() {
+        pause()
+        pageReady = false
+        pendingPing = nil
+        loadPage()
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        log.error("Editor page's process ended; reloading it")
+        reloadPage()
+    }
+
     // MARK: - Loading
 
     private func loadPage() {
@@ -122,8 +180,14 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case "hello":
             log.info("Editor page connected")
             pageReady = true
+            pendingPing = nil
             sendFullState()
             startUpdates()
+
+        case "pong":
+            if let token = (body["token"] as? NSNumber)?.intValue, token == pendingPing {
+                pendingPing = nil
+            }
 
         case "beginEdit", "edit", "endEdit":
             guard let parameter = parameter(for: body) else { return }
@@ -267,6 +331,75 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case .indexed: return "indexed"
         case .boolean: return "boolean"
         default: return "generic"
+        }
+    }
+}
+
+/// Holds the web view and reports when it becomes visible or hidden: moved into or out of a
+/// window, hidden or shown, or its window covered or uncovered. Visible means in a window, not
+/// hidden, and at least partly on screen.
+final class EditorHostView: NSView {
+    var onVisibilityChange: ((Bool) -> Void)?
+    private var occlusionObserver: NSObjectProtocol?
+    private var lastReported: Bool?
+
+    init(webView: WKWebView) {
+        super.init(frame: .zero)
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: topAnchor),
+            webView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
+    deinit {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+            self.occlusionObserver = nil
+        }
+        if let window {
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.report()
+                }
+            }
+        }
+        report()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        report()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        report()
+    }
+
+    private func report() {
+        let visible = window != nil && !isHiddenOrHasHiddenAncestor
+            && (window?.occlusionState.contains(.visible) ?? false)
+        if visible != lastReported {
+            lastReported = visible
+            onVisibilityChange?(visible)
         }
     }
 }

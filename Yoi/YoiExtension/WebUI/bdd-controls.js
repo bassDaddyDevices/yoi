@@ -470,10 +470,13 @@
 
     /**
      * A row of buttons for a parameter with a few named values.
-     *   options: { labels (defaults to the parameter's options), color, onChange(value) }
+     *   options: { labels (defaults to the parameter's options), values (the value each button
+     *              sets, defaulting to one per option in order), color, onChange(value) }
+     * A value no button stands for (an option left off the panel) lights no button.
      */
     function segmented(parameter, options = {}) {
         const labels = options.labels || parameter.options || ['Off', 'On'];
+        const values = options.values || labels.map((_, index) => index + parameter.min);
         const element = document.createElement('div');
         element.className = 'switch';
         element.setAttribute('role', 'radiogroup');
@@ -496,13 +499,13 @@
             button.type = 'button';
             button.textContent = label;
             button.setAttribute('role', 'radio');
-            button.addEventListener('click', () => control.gesture.once(index + parameter.min));
+            button.addEventListener('click', () => control.gesture.once(values[index]));
             element.appendChild(button);
             return button;
         });
         function show(value) {
             control.value = value;
-            const index = Math.round(value - parameter.min);
+            const index = values.indexOf(Math.round(value));
             buttons.forEach((button, i) => {
                 button.classList.toggle('selected', i === index);
                 button.setAttribute('aria-checked', String(i === index));
