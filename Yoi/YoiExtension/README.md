@@ -1,126 +1,27 @@
-# Audio Unit Extension
-This template serves as a starting point to create a custom plug-in using the latest Audio Unit standard (AUv3). The AUv3 standard builds on the App Extensions model, which means you deliver your plug-in as an extension that’s contained in an app distributed through the App Store or your own store.
+# YoiExtension
 
-There are 5 types of Audio Unit Extensions, each type is represented by a four character code.
+The YOI Audio Unit extension: "Bass Daddy Devices: YOI" (`aumu` / `yoi1` / `Bsdd`). It started from Apple's Audio Unit Extension App template; this note replaces the template's README.
 
-|Name|Four Character Code|
-|---|---|
-|Effect|aufx|
-|Music Effect|aumf|
-|MIDI Processor|aumi|
-|Instrument|aumu|
-|Generator|augn|
+- Build, test and layout: the workspace `README.md`, one folder up from `Yoi/`.
+- How the code works: the codebase wiki in `YOI_DOCS/wiki/` (start at `OVERVIEW.md`).
+- Why it's built this way: the decisions in `YOI_DOCS/decisions/`.
 
-
-## Languages
-This template uses Swift/SwiftUI for business logic and user interface and C++ (via Swift/C++ Interoperability) for real-time constrained areas.
-
-## Project Layout
-This template is designed to make Audio Unit development as easy as possible. In most cases you should only need to edit files in the top level groups; `Parameters`, `DSP` and `UI` groups.
-
-* /Common - Contains common code split by functionality which should rarely need to be modified. 
-	* `Audio Unit/YoiExtensionAudioUnit.swift` - A subclass of AUAudioUnit, this is the actual Audio Unit implementation. You may in advanced cases need to change this file to add additional functionality from AUAudioUnit.  
-* /Parameters
-	* `YoiExtensionParameterAddresses.h` - A pure `C` enum containing parameter addresses used by Swift and C++ to reference parameters.
-	
-	* `Parameters.swift` - Contains a ParameterTreeSpec object made up of ParameterGroupSpec's and ParameterSpec's which allow you describe your plug-in's parameters and the layout of those parameters.
-
-* /DSP
-	* `YoiExtensionDSPKernel.hpp` - A pure C++ class to handle the real-time aspects of the Audio Unit Extension. DSP and processing should be done here. Note: Be aware of the constraints of real-time audio processing. 
-* /UI
-	* `YoiExtensionMainView.swift` - SwiftUI based main view, add your SwiftUI views and controls here.
+| Folder | What's there |
+| --- | --- |
+| `DSP/` | The portable C++ kernel (`YoiExtensionDSPKernel.hpp`), the factory drawings, and `Shared/`, the reusable `bdd` blocks |
+| `Parameters/` | Parameter addresses (C header, shared with the kernel) and the host-facing tree (`Parameters.swift`) |
+| `Common/` | Template plumbing: the `AUAudioUnit` subclass, the render-block process helper, the view controller |
+| `UI/` | `WebEditor.swift` (hosts the web editor), and the SwiftUI panel kept as a fallback |
+| `WebUI/` | The editor page: shared `bdd-*.js` parts and YOI's `yoi-*` files |
 
 ## Adding a parameter
-1. Add a new parameter address to the `YoiExtensionParameterAddress` enum in `YoiExtensionParameterAddresses.h` 
 
+Addresses, identifiers and the saved drawing format are persistent: add parameters, never renumber or rename one.
 
-Example:
-
-```c
-typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
-	sendNote = 0,
-	....
-	attack
-```
-
-2. Create a new `ParameterSpec` in `Parameters.swift` using the enum value (created in step 1) as the address.
-
-Example:
-
-```swift
-ParameterGroupSpec(identifier: "global", name: "Global") {
-	....
-	ParameterSpec(
-		address: .attack,
-		identifier: "attack",
-		name: "Attack",
-		units: .milliseconds,
-		valueRange: 0.0...1000.0,
-		defaultValue: 100.0
-	)
-	...
-```
-Note: the identifier will be used to interact with this parameter from SwiftUI.
-
-3. In order to manipulate the DSP side of the Audio Unit we must handle changes to our new parameter in `YoiExtensionDSPKernel.hpp`. In the `setParameter` and `getParameter` methods add a case for the new parameter address.
-
-Example:
-
-```cpp
-	void setParameter(AUParameterAddress address, AUValue value) {
-		switch (address) {
-			....
-			case YoiExtensionExtensionParameterAddress:: attack:
-				mAttack = value;
-				break;			
-			...
-	}
-	
-	AUValue getParameter(AUParameterAddress address) {
-		switch (address) {
-			....
-			case YoiExtensionExtensionParameterAddress::attack:
-				return (AUValue) mAttack;
-			...
-	}
-	
-	// You can now apply attack your DSP algorithm using `mAttack` in the `process` call. 
-```
-
-4. For Audio Units that present a user interface, you should expose or access the new parameter in your SwiftUI view. The parameter can be accessed using its identifier (defined in step 2). It is accessed using dot notation as follows parameterTree.<ParameterGroupSpec Identifier>.<ParameterGroupSpec Identifier>.<ParameterSpec Identifier>
-
-Example
-
-```Swift
-// Access the attack parameters value from SwiftUI
-parameterTree.global.attack.value
-
-// Set the attack parameters value from SwiftUI
-parameterTree.global.attack.value = 0.5
-
-// Bind the parameter to a slider
-struct EqualizerExtensionMainView: View {
-	...	
-	var body: some View {
-		ParameterSlider(param: parameterTree.global.attack)
-	}
-	...
-}
-
-/*
-Note: the parameterTree.<parameter_name> must match the structure and identifier of the parameter defined in `Parameters.swift`.
-*/
-```
-
-## Catalyst / iPhone and iPad apps on Mac with Apple silicon
-To build this template in a Catalyst or iPhone/iPad App on Mac with Apple silicon, perform the following steps:  
-
-1. Select your Xcode project in the left hand side file browser
-2. Select your app target under the 'TARGETS' menu
-3. Under 'Deployment Info' select 'Mac Catalyst' (Note: Skip this step for iPhone and iPad apps on Mac with Apple silicon)
-4. Select the 'General' tab in the top menu bar
-5. Under 'Frameworks, Libraries, and Embedded Content' click the button next to the  iOS filter
-6. In the pop-up menu select 'Allow any platforms'
-
-## More Information
-[Apple Audio Developer Documentation](https://developer.apple.com/audio/)
+1. Add the address to `YoiExtensionParameterAddress` in `Parameters/YoiExtensionParameterAddresses.h`, in its section's block of ten, in **both** copies of the enum (Audio Unit and portable).
+2. Add a `ParameterSpec` to `Parameters/Parameters.swift` with the same default the kernel will use.
+3. In `DSP/YoiExtensionDSPKernel.hpp`, add the member and its default, a clamped case in `setParameter` and `getParameter`, and any smoother (in `initialize` and `snapSmoothers`). Store only the target; derive anything else on the render thread.
+4. Add the default to `testDefaultsMatchParameterTree` and a value to `testParametersRoundTrip` in `Tests/yoi_dsp_tests.cpp`, plus a test of what it does.
+5. Put it on the panel: an entry in `PAGES` in `WebUI/yoi-panel.js` (and a line in the SwiftUI fallback, `UI/YoiExtensionMainView.swift`).
+6. Build and run the app, then run `Tools/update-standin.sh` so the browser stand-in knows it.
+7. Add it to the parameter map, `YOI_DOCS/specs/parameters.md`.
