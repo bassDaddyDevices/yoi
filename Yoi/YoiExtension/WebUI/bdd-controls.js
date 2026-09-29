@@ -940,6 +940,135 @@
         return control;
     }
 
+    /**
+     * An XY pad for two parameters (the CHARACTER pad): X across, Y up. A drag sets both as one
+     * move, a gesture on each, so hosts record two lanes; a click jumps the dot there. Arrow keys
+     * nudge (shift for bigger steps), the wheel moves Y (X with shift), double-click resets both.
+     * Positions come from the screen, so it stays right when the panel is scaled.
+     *   options: { label, size (px, default 300), inset (px kept clear at the edges, default 16),
+     *              xLabel, yLabel, onChange(xValue, yValue) }
+     * Returns { element, controls: [x, y] }, each control with the usual contract.
+     */
+    function pad(xParameter, yParameter, options = {}) {
+        const size = options.size || 300;
+        // The dot travels inside this margin, so at the extremes it and its halo stay whole.
+        const inset = options.inset ?? 16;
+        const clamp01 = (value) => Math.min(1, Math.max(0, value));
+        const element = document.createElement('div');
+        element.className = 'bdd-pad bdd-well';
+        element.style.width = element.style.height = `${size}px`;
+        element.tabIndex = 0;
+        element.setAttribute('role', 'slider');
+        element.setAttribute('aria-label', options.label || `${xParameter.name} and ${yParameter.name}`);
+        element.innerHTML = `
+            <svg class='bdd-pad-art' viewBox='0 0 300 300' preserveAspectRatio='none' aria-hidden='true'>
+                <path class='bdd-pad-grid' d='M75 0V300M150 0V300M225 0V300M0 75H300M0 150H300M0 225H300'></path>
+                <path class='bdd-pad-peak-fill' d='M0 250 C 70 250, 150 248, 196 232 C 222 222, 232 150, 246 150 C 260 150, 266 238, 300 262 L300 300 L0 300Z'></path>
+                <path class='bdd-pad-peak' d='M0 250 C 70 250, 150 248, 196 232 C 222 222, 232 150, 246 150 C 260 150, 266 238, 300 262'></path>
+            </svg>
+            <div class='bdd-pad-cross-x'></div>
+            <div class='bdd-pad-cross-y'></div>
+            <div class='bdd-pad-dot'></div>
+            <span class='bdd-pad-axis bottom'></span>
+            <span class='bdd-pad-axis top'></span>`;
+        element.querySelector('.bdd-pad-axis.bottom').textContent = options.xLabel || `${xParameter.name} \u2192`;
+        element.querySelector('.bdd-pad-axis.top').textContent = options.yLabel || `\u2191 ${yParameter.name}`;
+        const dot = element.querySelector('.bdd-pad-dot');
+        const crossX = element.querySelector('.bdd-pad-cross-x');
+        const crossY = element.querySelector('.bdd-pad-cross-y');
+
+        function make(parameter) {
+            const control = {
+                element,
+                parameter,
+                value: parameter.default ?? parameter.min,
+                set(value) {
+                    if (!control.gesture.active) {
+                        control.value = value;
+                        draw();
+                    }
+                },
+            };
+            control.gesture = makeGesture(parameter, (value) => {
+                control.value = value;
+                draw();
+                if (options.onChange) {
+                    options.onChange(x.value, y.value);
+                }
+            });
+            return control;
+        }
+        const x = make(xParameter);
+        const y = make(yParameter);
+
+        function draw() {
+            const across = toPosition(xParameter, x.value);
+            const up = toPosition(yParameter, y.value);
+            dot.style.left = crossY.style.left = `calc(${inset}px + ${across} * (100% - ${2 * inset}px))`;
+            dot.style.top = crossX.style.top = `calc(${inset}px + ${1 - up} * (100% - ${2 * inset}px))`;
+            element.setAttribute('aria-valuetext',
+                `${xParameter.name} ${format(xParameter, x.value)}, ${yParameter.name} ${format(yParameter, y.value)}`);
+        }
+        function moveTo(event) {
+            const box = element.getBoundingClientRect();
+            const margin = inset * (box.width / element.offsetWidth);   // in screen pixels, as scaled
+            x.gesture.edit(fromPosition(xParameter, clamp01((event.clientX - box.left - margin) / (box.width - 2 * margin))));
+            y.gesture.edit(fromPosition(yParameter, clamp01(1 - (event.clientY - box.top - margin) / (box.height - 2 * margin))));
+        }
+
+        let dragging = false;
+        element.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0) {
+                return;
+            }
+            element.setPointerCapture(event.pointerId);
+            element.focus();
+            dragging = true;
+            x.gesture.begin();
+            y.gesture.begin();
+            moveTo(event);
+            event.preventDefault();
+        });
+        element.addEventListener('pointermove', (event) => {
+            if (dragging) {
+                moveTo(event);
+            }
+        });
+        const end = () => {
+            if (dragging) {
+                dragging = false;
+                x.gesture.end();
+                y.gesture.end();
+            }
+        };
+        element.addEventListener('pointerup', end);
+        element.addEventListener('pointercancel', end);
+        element.addEventListener('dblclick', () => {
+            x.gesture.once(xParameter.default ?? xParameter.min);
+            y.gesture.once(yParameter.default ?? yParameter.min);
+        });
+        element.addEventListener('keydown', (event) => {
+            const step = event.shiftKey ? 0.1 : 0.01;
+            const moves = { ArrowLeft: [x, -step], ArrowRight: [x, step], ArrowDown: [y, -step], ArrowUp: [y, step] };
+            const move = moves[event.key];
+            if (!move) {
+                return;
+            }
+            event.preventDefault();
+            const [target, delta] = move;
+            target.gesture.once(fromPosition(target.parameter, clamp01(toPosition(target.parameter, target.value) + delta)));
+        });
+        element.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            const target = event.shiftKey ? x : y;
+            const amount = event.shiftKey ? (event.deltaX || event.deltaY) : event.deltaY;
+            target.gesture.wheel(fromPosition(target.parameter, clamp01(toPosition(target.parameter, target.value) - amount * 0.002)));
+        }, { passive: false });
+
+        draw();
+        return { element, controls: [x, y] };
+    }
+
     window.bdd = window.bdd || {};
     window.bdd.controls = {
         toPosition,
@@ -957,5 +1086,6 @@
         choice,
         level,
         menuButton,
+        pad,
     };
 })();

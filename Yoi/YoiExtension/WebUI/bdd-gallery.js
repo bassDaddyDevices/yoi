@@ -3,7 +3,7 @@
 // parameter through the browser stand-in. Not loaded by the plug-in's panel.
 (function () {
     'use strict';
-    const { dial, fader, choice, level, menuButton } = bdd.controls;
+    const { dial, fader, choice, level, menuButton, pad, format } = bdd.controls;
     const editor = bdd.curveEditor(document.getElementById('curve'), Object.assign(bdd.curveStyles.modern(), {
         onEdit: (points) => bdd.setCurve(points),
         onHint: (text) => { document.getElementById('hint').textContent = text; },
@@ -40,6 +40,28 @@
         );
         document.getElementById('amount').append(add(fader(p.envAmount, { label: 'Amount', inline: true, travel: 200 })));
         editor.resize();
+        const showCharacter = (throat, res) => {
+            document.getElementById('throat-value').textContent = format(p.macroThroat, throat);
+            document.getElementById('res-value').textContent = format(p.resonance, res);
+        };
+        const character = pad(p.macroThroat, p.resonance, {
+            label: 'Character: throat across, resonance up',
+            xLabel: 'Throat →',
+            yLabel: '↑ Resonance',
+            onChange: showCharacter,
+        });
+        controls.push(...character.controls.map((control) => Object.assign(control, {
+            set: ((original) => (value) => {
+                original(value);
+                showCharacter(character.controls[0].value, character.controls[1].value);
+            })(control.set),
+        })));
+        document.getElementById('character-pad').appendChild(character.element);
+        showCharacter(character.controls[0].value, character.controls[1].value);
+        document.getElementById('character-foot').append(
+            add(choice(p.dsMode, { labels: ['S&H', 'Downsample'], values: [1, 2] })),
+            add(choice(p.dsLock, { labels: ['Free', 'Lock'] }))
+        );
         const dials = document.getElementById('dials');
         for (const [id, label] of [['macroVoice', 'Voice'], ['macroPower', 'Power'], ['macroControl', 'Control'], ['macroWidth', 'Width']]) {
             dials.appendChild(card(add(dial(p[id], { label }))));
@@ -53,8 +75,7 @@
 
         document.getElementById('inline').append(add(fader(p.resonance, { label: 'Resonance', inline: true, travel: 200 })));
         document.getElementById('choices').append(
-            add(choice(p.envTimeMode, { labels: ['Sync', 'Free'] })),
-            add(choice(p.dsMode, { labels: ['S&H', 'Downsample'], values: [1, 2] }))
+            add(choice(p.cleanupMode, { labels: ['Clean-up off', 'On'] }))
         );
 
         const sheet = document.getElementById('sheet');

@@ -19,6 +19,10 @@
         .drawing-well { height: 330px; position: relative; overflow: hidden; }
         .drawing-well canvas { width: 100%; height: 100%; display: block; }
         .hint { color: var(--bdd-faint); font-size: 11px; }
+        .character { width: 300px; display: flex; flex-direction: column; gap: 10px; }
+        .character-head, .character-foot { display: flex; align-items: center; justify-content: space-between; }
+        .character-values { display: flex; gap: 14px; font-size: 12px; color: #aab1ba; }
+        .character-values b { color: var(--bdd-ink); font-weight: 600; }
         .strip { width: 76px; height: 300px; box-sizing: border-box; padding: 18px 0 14px; }
     </style>
 </head>
@@ -35,6 +39,14 @@
                 <canvas id="curve" aria-label="Drawn envelope for the filter cutoff. Click to add a point, drag to move one."></canvas>
             </div>
             <span class="hint" id="hint"></span>
+        </section>
+        <section class="character" aria-label="Character">
+            <div class="character-head">
+                <span class="bdd-label">Character</span>
+                <div class="character-values"><span>Throat <b id="throat-value"></b></span><span>Res <b id="res-value"></b></span></div>
+            </div>
+            <div id="character-pad"></div>
+            <div class="character-foot" id="character-foot"></div>
         </section>
         <div class="row" id="dials"></div>
         <div class="row">

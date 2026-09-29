@@ -101,3 +101,21 @@
 }
 .bdd-modern .menu-item:hover { background: var(--bdd-raised); color: var(--bdd-ink); }
 .bdd-modern .menu-item.selected { color: var(--bdd-accent); }
+
+/* Pad: two parameters on one surface (CHARACTER: throat across, resonance up). */
+.bdd-pad { position: relative; overflow: hidden; cursor: crosshair; touch-action: none; user-select: none; box-sizing: border-box; }
+.bdd-pad:focus-visible { outline: 2px solid var(--bdd-accent); outline-offset: 3px; }
+.bdd-pad-art { position: absolute; inset: 0; width: 100%; height: 100%; }
+.bdd-pad-grid { fill: none; stroke: #1c2025; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.bdd-pad-peak { fill: none; stroke: var(--bdd-accent); stroke-width: 1.5; opacity: 0.28; vector-effect: non-scaling-stroke; }
+.bdd-pad-peak-fill { fill: var(--bdd-accent); opacity: 0.05; }
+.bdd-pad-cross-x { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed color-mix(in srgb, var(--bdd-accent) 30%, transparent); pointer-events: none; }
+.bdd-pad-cross-y { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed color-mix(in srgb, var(--bdd-accent) 30%, transparent); pointer-events: none; }
+.bdd-pad-dot {
+    position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; pointer-events: none;
+    background: var(--bdd-accent); box-shadow: 0 0 0 8px color-mix(in srgb, var(--bdd-accent) 14%, transparent);
+}
+.bdd-pad-dot::after { content: ''; position: absolute; left: 5px; top: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--bdd-ground); }
+.bdd-pad-axis { position: absolute; left: 12px; font: 600 10px/1 var(--bdd-font); letter-spacing: 0.06em; color: var(--bdd-faint); text-transform: uppercase; pointer-events: none; }
+.bdd-pad-axis.bottom { bottom: 10px; }
+.bdd-pad-axis.top { top: 10px; }
