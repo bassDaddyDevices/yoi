@@ -38,6 +38,8 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
     filterMode = 30,
     cutoff = 31,
     resonance = 32,
+    filterMirror = 33,
+    filterDrive = 34,
 
     ampAttack = 40,
     ampDecay = 41,
@@ -61,6 +63,7 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
     foldPosition = 74,
     cleanupMode = 75,
     cleanupMultiple = 76,
+    dsLock = 77,
 
     boostAmount = 80,
     ottDepth = 81,
@@ -96,6 +99,8 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
     filterMode = 30,
     cutoff = 31,
     resonance = 32,
+    filterMirror = 33,
+    filterDrive = 34,
 
     ampAttack = 40,
     ampDecay = 41,
@@ -119,6 +124,7 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
     foldPosition = 74,
     cleanupMode = 75,
     cleanupMultiple = 76,
+    dsLock = 77,
 
     boostAmount = 80,
     ottDepth = 81,

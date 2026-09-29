@@ -107,6 +107,19 @@
                 },
             ],
         },
+        {
+            // Experiments to A/B by ear. Whatever earns its place moves to its home page.
+            name: 'LAB',
+            rows: [
+                {
+                    knobs: [
+                        { id: 'dsLock', label: 'LOCK', color: YELLOW },
+                        { id: 'filterMirror', label: 'MIRROR', color: BLUE },
+                        { id: 'filterDrive', label: 'DRIVE', color: BLUE },
+                    ],
+                },
+            ],
+        },
     ];
 
     const KNOB_SIZE = 64;
@@ -371,6 +384,7 @@
         setDim('subOctave', v.subLevel <= 0);
         setDim('ottTime', v.ottDepth <= 0);
         setDim('ottUpward', v.ottDepth <= 0);
+        setDim('dsLock', downsampleMode !== 1);   // LOCK only acts on S&H
 
         const free = v.envTimeMode >= 0.5;
         document.getElementById('time-sync').hidden = free;

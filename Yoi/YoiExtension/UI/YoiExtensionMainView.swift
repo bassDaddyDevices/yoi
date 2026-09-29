@@ -56,6 +56,11 @@ struct YoiExtensionMainView: View {
                     ParameterSlider(param: parameterTree.finish.ottTime)
                     ParameterSlider(param: parameterTree.finish.ottUpward)
                 }
+                section("Lab") {
+                    ParameterSlider(param: parameterTree.grit.dsLock)
+                    ParameterSlider(param: parameterTree.filter.filterMirror)
+                    ParameterSlider(param: parameterTree.filter.filterDrive)
+                }
                 section("Oscillators") {
                     ParameterSlider(param: parameterTree.oscillators.oscShape)
                     ParameterSlider(param: parameterTree.oscillators.subLevel)

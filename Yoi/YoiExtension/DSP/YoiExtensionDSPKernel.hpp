@@ -97,7 +97,8 @@ public:
                                 &mOutputSmoother, &mEnvAmountSmoother, &mAccelStartSmoother,
                                 &mAccelEndSmoother, &mAccelCurveSmoother, &mFoldAmountSmoother,
                                 &mCleanupMultipleSmoother, &mSubCrossoverSmoother, &mBoostSmoother,
-                                &mOttDepthSmoother, &mOttUpwardSmoother, &mWidthSmoother }) {
+                                &mOttDepthSmoother, &mOttUpwardSmoother, &mWidthSmoother,
+                                &mMirrorSmoother, &mDriveSmoother, &mLockSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
@@ -120,6 +121,8 @@ public:
         mMainOscillator.reset();
         mSubOscillator.reset();
         mFilter.reset();
+        mMirrorFilter.reset();
+        mLockMultiple = 0.0;
         mSampleAndHold.reset();
         mSampleCountDownsampler.reset();
         mWavefolder.reset();
@@ -257,6 +260,15 @@ public:
             case YoiExtensionParameterAddress::ottUpward:
                 mOttUpward = std::clamp(value * 0.01f, 0.0f, 2.0f);
                 break;
+            case YoiExtensionParameterAddress::filterMirror:
+                mMirrorLevel = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                break;
+            case YoiExtensionParameterAddress::filterDrive:
+                mFilterDrive = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                break;
+            case YoiExtensionParameterAddress::dsLock:
+                mLockAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                break;
             case YoiExtensionParameterAddress::cleanupMode:
                 mCleanupMode = std::clamp(int(std::lround(value)), 0, 1);
                 break;
@@ -304,6 +316,9 @@ public:
             case YoiExtensionParameterAddress::widthAmount: return mWidthAmount * 100.0f;
             case YoiExtensionParameterAddress::ottTime: return mOttTime;
             case YoiExtensionParameterAddress::ottUpward: return mOttUpward * 100.0f;
+            case YoiExtensionParameterAddress::filterMirror: return mMirrorLevel * 100.0f;
+            case YoiExtensionParameterAddress::filterDrive: return mFilterDrive * 100.0f;
+            case YoiExtensionParameterAddress::dsLock: return mLockAmount * 100.0f;
             case YoiExtensionParameterAddress::cleanupMode: return AUValue(mCleanupMode);
             case YoiExtensionParameterAddress::cleanupMultiple: return mCleanupMultiple;
             default: return 0.f;
@@ -642,11 +657,22 @@ public:
 
             // The top of the drawing is the CUTOFF setting; the bottom is Amount octaves below it.
             const double modulatedOctaves = double(cutoffOctaves) - double(envAmount) * (1.0 - double(drawing));
-            mFilter.setCoefficients(std::exp2(modulatedOctaves),
-                                    bdd::StateVariableFilter::qForResonance(resonanceRange(resonanceAmount)),
-                                    mSampleRate);
-            const auto filtered = mFilter.process(mix);
+            const double filterQ = bdd::StateVariableFilter::qForResonance(resonanceRange(resonanceAmount));
+            mFilter.setCoefficients(std::exp2(modulatedOctaves), filterQ, mSampleRate);
+            // LAB: DRIVE saturates the filter's resonance loop (its band-pass state), which
+            // compresses a strong resonant peak: softer and a little darker, not a scream. At 0 it is
+            // the linear filter exactly.
+            const double drive = double(mDriveSmoother.next(mFilterDrive));
+            const double driveLevel = kDriveLevel * std::exp2(kDriveRangeOctaves * (1.0 - drive));
+            const auto filtered = (drive > 0.0) ? mFilter.processDriven(mix, driveLevel) : mFilter.process(mix);
             double filteredVoice = filtered.lowPass + (filtered.bandPass - filtered.lowPass) * double(bandPassAmount);
+            // LAB: MIRROR adds a second band-pass peak, in parallel, moving opposite the drawing:
+            // the bottom of the drawing puts it at CUTOFF, the top Amount octaves below. It always
+            // runs, so bringing it in never starts from a stale state; at 0 it adds nothing.
+            const double mirrorOctaves = double(cutoffOctaves) - double(envAmount) * double(drawing);
+            mMirrorFilter.setCoefficients(std::exp2(mirrorOctaves), filterQ, mSampleRate);
+            const auto mirrored = (drive > 0.0) ? mMirrorFilter.processDriven(mix, driveLevel) : mMirrorFilter.process(mix);
+            filteredVoice += double(mMirrorSmoother.next(mMirrorLevel)) * mirrored.bandPass;
             if (mActiveFoldPosition == foldPreDownsample) {
                 filteredVoice = kOscillatorHeadroom * applyFold(filteredVoice / kOscillatorHeadroom, foldDepth, positionBlend);
             }
@@ -656,7 +682,19 @@ public:
             // them (or off) crossfades instead of clicking.
             const float sampleHoldAmount = mSampleHoldWeight.next(sampleHoldTarget);
             const float downsampleAmount = mDownsampleWeight.next(downsampleTarget);
-            const float sampledAndHeld = mSampleAndHold.next(voice, sampleHoldRate, mSampleRate);
+            // LAB: LOCK pulls the S&H rate onto a whole multiple of the note (the one nearest the
+            // rate setting), so its aliases land on the note's harmonics. At 0 it is the free rate.
+            double holdRate = sampleHoldRate;
+            const double lock = double(mLockSmoother.next(mLockAmount));
+            if (lock > 0.0) {
+                const double fundamental = bdd::noteToHertz(pitch);
+                const double ratio = sampleHoldRate / fundamental;
+                if (mLockMultiple < 1.0 || std::fabs(ratio - mLockMultiple) > kLockHysteresis) {
+                    mLockMultiple = std::max(1.0, std::round(ratio));
+                }
+                holdRate = sampleHoldRate * std::pow(mLockMultiple * fundamental / sampleHoldRate, lock);
+            }
+            const float sampledAndHeld = mSampleAndHold.next(voice, holdRate, mSampleRate);
             const float downsampled = mSampleCountDownsampler.next(voice, downsampleFactor);
             // Weights that sum to 1, so a fully selected mode passes its output exactly (a held
             // step stays perfectly flat) rather than rebuilding it from the unheld signal.
@@ -900,6 +938,15 @@ private:
     /// up adds density and bite rather than a change in level. Measured on the default sound,
     /// where full depth then stays within 0.3 dB and peaks just under the limiter's knee.
     static constexpr double kOttMakeupDecibels = 5.0;
+    /// LAB DRIVE: the level the filter's resonance loop saturates at with DRIVE at full (twice the
+    /// voice's own headroom, so only a resonant peak reaches it), and how many octaves higher it
+    /// sits at 0 % (far above anything the voice reaches). At 0.1 it strangled the whole low-pass
+    /// path, about 6 dB quieter and dark on the default patch; pushing the voice in harder did the same.
+    static constexpr double kDriveLevel = 0.5;
+    static constexpr double kDriveRangeOctaves = 6.0;
+    /// LAB LOCK: how far the rate setting must drift from the locked multiple of the note before
+    /// LOCK picks a new one, so a glide or a turn of the rate knob doesn't make it chatter.
+    static constexpr double kLockHysteresis = 0.75;
 
     void startNote(int note, bool legato) {
         const bool glides = mHasPlayed
@@ -1061,6 +1108,9 @@ private:
         mBoostSmoother.snap(mBoostAmount);
         mOttDepthSmoother.snap(mOttDepth);
         mOttUpwardSmoother.snap(mOttUpward);
+        mMirrorSmoother.snap(mMirrorLevel);
+        mDriveSmoother.snap(mFilterDrive);
+        mLockSmoother.snap(mLockAmount);
         mOttWeight.snap(mOttDepth > 0.0f ? 1.0f : 0.0f);
         mWidthSmoother.snap(mWidthAmount);
         mCleanupWeight.snap(mCleanupMode != 0 ? 1.0f : 0.0f);
@@ -1118,6 +1168,10 @@ private:
     float mOttTime = 50.0f;
     float mOttUpward = 1.0f;
     float mAppliedOttTime = -1.0f;
+    float mMirrorLevel = 0.0f;
+    float mFilterDrive = 0.0f;
+    float mLockAmount = 0.0f;
+    double mLockMultiple = 0.0;
 
     float mBendPosition = 0.0f;
 
@@ -1149,6 +1203,9 @@ private:
     bdd::Smoother mBoostSmoother;
     bdd::Smoother mOttDepthSmoother;
     bdd::Smoother mOttUpwardSmoother;
+    bdd::Smoother mMirrorSmoother;
+    bdd::Smoother mDriveSmoother;
+    bdd::Smoother mLockSmoother;
     bdd::LinearRamp mOttWeight;
     bdd::Smoother mWidthSmoother;
     float mAppliedCrossoverOctaves = -1.0f;
@@ -1160,6 +1217,7 @@ private:
     bdd::MorphOscillator mMainOscillator;
     bdd::SubOscillator mSubOscillator;
     bdd::StateVariableFilter mFilter;
+    bdd::StateVariableFilter mMirrorFilter;
     bdd::ADSREnvelope mAmpEnvelope;
     bdd::SampleAndHold mSampleAndHold;
     bdd::SampleCountDownsampler mSampleCountDownsampler;

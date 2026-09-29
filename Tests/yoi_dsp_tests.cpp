@@ -182,7 +182,7 @@ void testDefaultsMatchParameterTree() {
         { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 45.0f },
         { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 5.0f },
         { boostAmount, 0.0f }, { ottDepth, 0.0f }, { widthAmount, 0.0f }, { ottTime, 50.0f },
-        { ottUpward, 100.0f },
+        { ottUpward, 100.0f }, { filterMirror, 0.0f }, { filterDrive, 0.0f }, { dsLock, 0.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -220,7 +220,7 @@ void testParametersRoundTrip() {
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
         { foldAmount, 35.0f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
         { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f }, { ottTime, 20.0f },
-        { ottUpward, 150.0f },
+        { ottUpward, 150.0f }, { filterMirror, 55.0f }, { filterDrive, 30.0f }, { dsLock, 70.0f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -1387,6 +1387,96 @@ void testOttTimeAndUpward() {
     CHECK(kernel->getParameter(ottTime) == 0.0f, "OTT TIME should start at 0 %%, got %f", kernel->getParameter(ottTime));
 }
 
+void testLabExperiments() {
+    // The LAB page: LOCK, MIRROR and DRIVE. At 0 each is an exact bypass (every other test runs
+    // with them at 0); these check each one does what it's for, and that nothing escapes at full.
+
+    // LOCK: S&H at a whole multiple of the note puts the aliases on the note's harmonics.
+    auto playLock = [](float lock) {
+        auto kernel = makeKernel(kSampleRate, false, true, false);
+        kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(subCrossover, 50.0f);
+        kernel->setParameter(cutoff, 2500.0f);
+        kernel->setParameter(resonance, 0.0f);
+        kernel->setParameter(dsLock, lock);
+        kernel->noteOn(45, 100);   // 110 Hz against 1400 Hz: 12.7 times the note, so unlocked is off-pitch
+        return render(*kernel, frames(1.5));
+    };
+    auto harmonicShare = [](const std::vector<float>& output) {
+        const size_t from = size_t(frames(0.3));
+        double onHarmonics = 0.0;
+        for (int harmonic = 1; harmonic * noteHertz(45) < 20000.0; ++harmonic) {
+            const double energy = energyAt(output, from, output.size(), harmonic * noteHertz(45));
+            onHarmonics += 2.0 * energy * energy;   // a sine of amplitude 2e has power 2e^2
+        }
+        const double total = rms(output, from);
+        return onHarmonics / (total * total);
+    };
+    const double free = harmonicShare(playLock(0.0f));
+    const double locked = harmonicShare(playLock(100.0f));
+    CHECK(locked > 0.95 && locked > free + 0.05, "LOCK should put the S&H's aliases on the note's harmonics: %.1f %% on them, against %.1f %% unlocked",
+          100.0 * locked, 100.0 * free);
+
+    // MIRROR: a second peak moving opposite the drawing. With the drawing held at the top, the
+    // main peak is at CUTOFF and the mirror Amount octaves below; held at the bottom, the reverse.
+    auto playMirror = [](float drawing, float mirror) {
+        auto kernel = makeKernel(kSampleRate, true);
+        setFlatDrawing(*kernel, drawing);
+        kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(subCrossover, 50.0f);
+        kernel->setParameter(filterMode, 1.0f);   // band-pass, so each peak stands on its own
+        kernel->setParameter(cutoff, 1600.0f);
+        kernel->setParameter(envAmount, 3.0f);    // so the bottom is 200 Hz
+        kernel->setParameter(resonance, 60.0f);
+        kernel->setParameter(filterMirror, mirror);
+        kernel->noteOn(43, 100);   // 98 Hz: harmonics at 196 and 1568 Hz, next to both peaks
+        return render(*kernel, frames(1.0));
+    };
+    const size_t mirrorFrom = size_t(frames(0.3));
+    auto near = [&](const std::vector<float>& output, double hertz) { return energyAt(output, mirrorFrom, output.size(), hertz); };
+    CHECK(near(playMirror(1.0f, 100.0f), 196.0) > near(playMirror(1.0f, 0.0f), 196.0) * 3.0,
+          "with the drawing at the top, MIRROR should add a peak at the bottom of the sweep");
+    CHECK(near(playMirror(0.0f, 100.0f), 1568.0) > near(playMirror(0.0f, 0.0f), 1568.0) * 3.0,
+          "with the drawing at the bottom, MIRROR should add a peak at CUTOFF");
+
+    // DRIVE: saturating the resonance loop tames a strong peak, and leaves the default sound nearly alone.
+    auto playDrive = [](float drive, float resonanceAmount) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(resonance, resonanceAmount);
+        kernel->setParameter(filterDrive, drive);
+        kernel->noteOn(33, 100);
+        return render(*kernel, frames(1.5));
+    };
+    const auto sharp = playDrive(0.0f, 100.0f);
+    const auto tamed = playDrive(100.0f, 100.0f);
+    CHECK(peak(tamed) < peak(sharp) * 0.8f, "DRIVE should tame the peak at full resonance: peak %f against %f", peak(tamed), peak(sharp));
+    const size_t driveFrom = size_t(frames(0.3));
+    const double defaultLevel = 20.0 * std::log10(rms(playDrive(0.0f, 30.0f), driveFrom));
+    const double drivenLevel = 20.0 * std::log10(rms(playDrive(100.0f, 30.0f), driveFrom));
+    CHECK(std::fabs(drivenLevel - defaultLevel) < 1.5, "DRIVE at full should leave the default sound's level nearly alone: %.1f dB against %.1f dB",
+          drivenLevel, defaultLevel);
+
+    // Everything at full, low and high, stays finite and inside full scale.
+    for (int note : { 33, 72 }) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        for (auto [address, value] : std::initializer_list<std::pair<AUParameterAddress, float>>{
+                 { resonance, 100.0f }, { filterMode, 1.0f }, { envAmount, 8.0f }, { filterMirror, 100.0f },
+                 { filterDrive, 100.0f }, { dsLock, 100.0f }, { foldAmount, 100.0f }, { boostAmount, 100.0f },
+                 { ottDepth, 100.0f }, { ottUpward, 200.0f } }) {
+            kernel->setParameter(address, value);
+        }
+        kernel->noteOn(note, 100);
+        const auto output = render(*kernel, frames(1.0));
+        CHECK(allFinite(output) && peak(output) <= 1.0f, "every LAB control at full should stay bounded (note %d): peak %f", note, peak(output));
+    }
+
+    auto kernel = makeKernel();
+    kernel->setParameter(dsLock, 150.0f);
+    CHECK(kernel->getParameter(dsLock) == 100.0f, "LOCK should stop at 100 %%, got %f", kernel->getParameter(dsLock));
+    kernel->setParameter(filterDrive, -5.0f);
+    CHECK(kernel->getParameter(filterDrive) == 0.0f, "DRIVE should start at 0 %%, got %f", kernel->getParameter(filterDrive));
+}
+
 void testWidthIsMonoCompatible() {
     auto play = [](float width) {
         auto kernel = makeKernel();
@@ -1481,6 +1571,7 @@ int main() {
     testHarmonicBooster();
     testOttEvensOutTheLevel();
     testOttTimeAndUpward();
+    testLabExperiments();
     testWidthIsMonoCompatible();
     testFinishExtremesStayBounded();
     testCleanupFilter();

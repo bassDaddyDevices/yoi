@@ -69,6 +69,18 @@ struct StateVariableFilter {
         ic2eq = flushDenormal(2.0 * v2 - ic2eq);
         return { v2, v1 * k, input - k * v1 - v2 };
     }
+
+    /// As process(), with the band-pass state (the resonance loop) soft-clipped at `level`, so a
+    /// strong peak saturates and compresses instead of only growing with Q. A level far above the
+    /// signal behaves like process(). Outputs are unnormalised the same way.
+    inline Outputs processDriven(double input, double level) {
+        const double v3 = input - ic2eq;
+        const double v1 = a1 * ic1eq + a2 * v3;
+        const double v2 = ic2eq + a2 * ic1eq + a3 * v3;
+        ic1eq = flushDenormal(level * std::tanh((2.0 * v1 - ic1eq) / level));
+        ic2eq = flushDenormal(2.0 * v2 - ic2eq);
+        return { v2, v1 * k, input - k * v1 - v2 };
+    }
 };
 
 /// Four-pole (24 dB per octave) Butterworth low-pass: two state-variable sections with the Qs

@@ -122,6 +122,22 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueRange: 0.0...100.0,
             defaultValue: 30.0
         )
+        ParameterSpec(
+            address: .filterMirror,
+            identifier: "filterMirror",
+            name: "Mirror",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .filterDrive,
+            identifier: "filterDrive",
+            name: "Filter Drive",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
     }
     ParameterGroupSpec(identifier: "amp", name: "Amp Envelope") {
         ParameterSpec(
@@ -301,6 +317,14 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueRange: 1.0...16.0,
             defaultValue: 5.0,
             flags: logarithmic
+        )
+        ParameterSpec(
+            address: .dsLock,
+            identifier: "dsLock",
+            name: "S&H Lock",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
         )
     }
     ParameterGroupSpec(identifier: "finish", name: "Finish") {
