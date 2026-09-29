@@ -283,7 +283,7 @@ public:
                 mControl = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 setParameter(YoiExtensionParameterAddress::cleanupMultiple, float(kControlCleanupWidest * std::exp2(-double(mControl))));
                 setParameter(YoiExtensionParameterAddress::boostAmount, mControl * kControlBoostMaximum);
-                setParameter(YoiExtensionParameterAddress::filterDrive, float(std::pow(double(mControl), kControlDriveCurve)) * 100.0f);
+                setParameter(YoiExtensionParameterAddress::filterDrive, float(std::pow(double(mControl), kControlDriveCurve)) * kControlDriveMaximum);
                 break;
             case YoiExtensionParameterAddress::macroWidth:
                 mWidth = std::clamp(value * 0.01f, 0.0f, 1.0f);
@@ -979,10 +979,13 @@ private:
     static constexpr double kThroatLightAmount = 12.0;
     static constexpr double kThroatFullAmount = 70.0;
     /// CONTROL, raw to tight: clean-up from 16x to 8x (past 8x it kills the top end), BOOST up
-    /// to 40 %, and DRIVE on a curve, uncapped (it does a lot near full): 2 is squared, 3 cubed.
+    /// to 40 %, and DRIVE on a curve (2 is squared, 3 cubed) up to 60 %. DRIVE was uncapped at
+    /// first, but it flattens the resonance: RES 0 -> 100 % spans 10.8 dB with no drive, 8.1 dB at
+    /// 60 % and only 3.1 dB at 100 %, where the owner heard RES doing nothing at all.
     static constexpr double kControlCleanupWidest = 16.0;
     static constexpr float kControlBoostMaximum = 40.0f;
     static constexpr double kControlDriveCurve = 2.0;
+    static constexpr float kControlDriveMaximum = 60.0f;
     /// WIDTH: the sub gives way to the dimension expander. Sub Level at WIDTH 0 and at full; the
     /// full-width value is a first guess, for the owner's ears.
     static constexpr float kWidthSubLevelNarrow = 75.0f;

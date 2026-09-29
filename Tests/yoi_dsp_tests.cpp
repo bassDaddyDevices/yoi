@@ -1522,9 +1522,9 @@ void testMacros() {
     kernel->setParameter(macroControl, 0.0f);
     near(cleanupMultiple, 16.0f); near(boostAmount, 0.0f); near(filterDrive, 0.0f);
     kernel->setParameter(macroControl, 50.0f);
-    near(cleanupMultiple, float(16.0 / std::sqrt(2.0))); near(boostAmount, 20.0f); near(filterDrive, 25.0f);   // drive squared
+    near(cleanupMultiple, float(16.0 / std::sqrt(2.0))); near(boostAmount, 20.0f); near(filterDrive, 15.0f);   // drive squared, capped at 60 %
     kernel->setParameter(macroControl, 100.0f);
-    near(cleanupMultiple, 8.0f); near(boostAmount, 40.0f); near(filterDrive, 100.0f);
+    near(cleanupMultiple, 8.0f); near(boostAmount, 40.0f); near(filterDrive, 60.0f);
     kernel->setParameter(macroWidth, 0.0f);
     near(widthAmount, 0.0f); near(subLevel, 75.0f);
     kernel->setParameter(macroWidth, 100.0f);
