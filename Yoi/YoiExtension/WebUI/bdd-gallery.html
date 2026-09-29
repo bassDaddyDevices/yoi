@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Bass Daddy Devices controls</title>
+    <link rel="stylesheet" href="bdd-modern.css">
+    <style>
+        body { margin: 0; background: var(--bdd-ground); color: var(--bdd-ink); font-family: var(--bdd-font); }
+        main { max-width: 1040px; margin: 40px auto; display: flex; flex-direction: column; gap: 28px; padding: 0 20px; }
+        h1 { margin: 0; font: 800 22px/1 var(--bdd-display); letter-spacing: 0.06em; color: var(--bdd-accent); }
+        p { margin: 0; color: var(--bdd-muted); font-size: 13px; }
+        .row { display: flex; gap: 12px; align-items: stretch; }
+        .row > .bdd-card { padding: 22px 18px; display: flex; align-items: center; justify-content: center; gap: 16px; }
+        .grow { flex-grow: 1; }
+        .sheet { width: 300px; display: flex; flex-direction: column; gap: 18px; }
+        .strip { width: 76px; height: 300px; box-sizing: border-box; padding: 18px 0 14px; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>YOI</h1>
+        <p>Every control here is bound to a real YOI parameter through the browser stand-in: drag, scroll, use the keyboard, double-click to reset.</p>
+        <div class="row" id="dials"></div>
+        <div class="row">
+            <div class="bdd-card grow" id="inline"></div>
+            <div class="bdd-card" id="choices"></div>
+        </div>
+        <div class="row">
+            <div class="bdd-card sheet" id="sheet"></div>
+            <div class="bdd-card strip" id="strip"></div>
+        </div>
+    </main>
+    <script src="bdd-bridge.js"></script>
+    <script src="bdd-pixel.js"></script>
+    <script src="bdd-controls.js"></script>
+    <script src="yoi-standin.js"></script>
+    <script src="bdd-gallery.js"></script>
+</body>
+</html>

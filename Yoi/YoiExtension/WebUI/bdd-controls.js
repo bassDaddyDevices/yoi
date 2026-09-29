@@ -668,6 +668,235 @@
         }
     });
 
+    // MARK: - Modern controls
+    // The redesign's controls (YOI_DOCS decisions/redesign-macros), styled by bdd-modern.css.
+    // Same contract as the pixel ones above: { element, parameter, value, set(value), gesture }.
+
+    /** An SVG arc for a dial: 270 degrees clockwise from the bottom left, `fraction` of the way. */
+    function dialArc(center, radius, fraction) {
+        const at = (f) => {
+            const angle = (-225 + 270 * f) * Math.PI / 180;
+            return [center + radius * Math.cos(angle), center + radius * Math.sin(angle)];
+        };
+        const [x0, y0] = at(0);
+        if (fraction <= 0.001) {
+            return `M ${x0.toFixed(2)} ${y0.toFixed(2)}`;
+        }
+        const [x1, y1] = at(Math.min(1, fraction));
+        const large = 270 * fraction > 180 ? 1 : 0;
+        return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${radius} ${radius} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+    }
+
+    /**
+     * A dial: an accent arc on a track around a softly lit body with a pointer, the name and the
+     * value underneath.
+     *   options: { label, size (px, default 84), format(value), onChange(value) }
+     */
+    function dial(parameter, options = {}) {
+        const size = options.size || 84;
+        const center = size / 2;
+        const stroke = Math.max(3, Math.round(size * 0.048));
+        const radius = center - stroke;
+        const bodySize = Math.round(size * 0.667);
+        const element = document.createElement('div');
+        element.className = 'bdd-dial';
+        makeSlider(element, parameter, options.label);
+        const face = document.createElement('div');
+        face.className = 'bdd-dial-face';
+        face.style.width = face.style.height = `${size}px`;
+        const svg = document.createElementNS(SVG, 'svg');
+        svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+        svg.setAttribute('width', String(size));
+        svg.setAttribute('height', String(size));
+        svg.setAttribute('aria-hidden', 'true');
+        const track = document.createElementNS(SVG, 'path');
+        track.setAttribute('class', 'bdd-dial-track');
+        track.setAttribute('stroke-width', String(stroke));
+        track.setAttribute('d', dialArc(center, radius, 1));
+        const arc = document.createElementNS(SVG, 'path');
+        arc.setAttribute('class', 'bdd-dial-arc');
+        arc.setAttribute('stroke-width', String(stroke));
+        svg.append(track, arc);
+        const body = document.createElement('div');
+        body.className = 'bdd-dial-body';
+        body.style.width = body.style.height = `${bodySize}px`;
+        body.style.left = body.style.top = `${(size - bodySize) / 2}px`;
+        const pointer = document.createElement('div');
+        pointer.className = 'bdd-dial-pointer';
+        body.appendChild(pointer);
+        face.append(svg, body);
+        const name = document.createElement('span');
+        name.className = 'bdd-label';
+        name.textContent = options.label || parameter.name;
+        const readout = document.createElement('span');
+        readout.className = 'bdd-value';
+        element.append(face, name, readout);
+        const text = options.format || ((value) => format(parameter, value));
+        const control = {
+            element,
+            parameter,
+            value: parameter.default ?? parameter.min,
+            set(value) {
+                if (!control.gesture.active) {
+                    show(value);
+                }
+            },
+        };
+        function show(value) {
+            control.value = value;
+            const position = toPosition(parameter, value);
+            arc.setAttribute('d', dialArc(center, radius, position));
+            body.style.transform = `rotate(${-135 + 270 * position}deg)`;
+            readout.textContent = text(value);
+            describe(element, parameter, value);
+        }
+        control.gesture = makeGesture(parameter, (value) => {
+            show(value);
+            if (options.onChange) {
+                options.onChange(value);
+            }
+        });
+        attachDragging(element, parameter, control);
+        show(control.value);
+        return control;
+    }
+
+    /**
+     * A slim horizontal slider with its name and value above it, or all three in a row (`inline`).
+     *   options: { label, inline, travel (px for the full range, default 280), format(value), onChange(value) }
+     */
+    function fader(parameter, options = {}) {
+        const element = document.createElement('div');
+        element.className = options.inline ? 'bdd-fader inline' : 'bdd-fader';
+        makeSlider(element, parameter, options.label);
+        const name = document.createElement('span');
+        name.className = options.inline ? 'bdd-label' : 'bdd-fader-name';
+        name.textContent = options.label || parameter.name;
+        const readout = document.createElement('span');
+        readout.className = 'bdd-value';
+        const track = document.createElement('div');
+        track.className = 'bdd-fader-track';
+        const fill = document.createElement('div');
+        fill.className = 'bdd-fader-fill';
+        const thumb = document.createElement('div');
+        thumb.className = 'bdd-fader-thumb';
+        track.append(fill, thumb);
+        if (options.inline) {
+            element.append(name, track, readout);
+        } else {
+            const head = document.createElement('div');
+            head.className = 'bdd-fader-head';
+            head.append(name, readout);
+            element.append(head, track);
+        }
+        const text = options.format || ((value) => format(parameter, value));
+        const control = {
+            element,
+            parameter,
+            value: parameter.default ?? parameter.min,
+            set(value) {
+                if (!control.gesture.active) {
+                    show(value);
+                }
+            },
+        };
+        function show(value) {
+            control.value = value;
+            const percent = `${toPosition(parameter, value) * 100}%`;
+            fill.style.width = percent;
+            thumb.style.left = percent;
+            readout.textContent = text(value);
+            describe(element, parameter, value);
+        }
+        control.gesture = makeGesture(parameter, (value) => {
+            show(value);
+            if (options.onChange) {
+                options.onChange(value);
+            }
+        });
+        attachDragging(element, parameter, control, { pixelsForFullRange: options.travel || 280 });
+        show(control.value);
+        return control;
+    }
+
+    /** Segmented choice buttons in a well. The options of segmented(), plus { vertical, stretch }. */
+    function choice(parameter, options = {}) {
+        const control = segmented(parameter, options);
+        control.element.className = 'bdd-choice' + (options.vertical ? ' vertical' : '') + (options.stretch ? ' stretch' : '');
+        control.element.style.removeProperty('--switch-color');
+        return control;
+    }
+
+    /**
+     * LEVEL: a tall fader with a stereo meter beside it. `control.meter(left, right)` takes 0...1.
+     *   options: { label, travel (px for the full range, default 240), format(value), onChange(value) }
+     */
+    function level(parameter, options = {}) {
+        const element = document.createElement('div');
+        element.className = 'bdd-level';
+        makeSlider(element, parameter, options.label);
+        const body = document.createElement('div');
+        body.className = 'bdd-level-body';
+        const track = document.createElement('div');
+        track.className = 'bdd-level-track';
+        const fill = document.createElement('div');
+        fill.className = 'bdd-level-fill';
+        const thumb = document.createElement('div');
+        thumb.className = 'bdd-level-thumb';
+        track.append(fill, thumb);
+        const meter = document.createElement('div');
+        meter.className = 'bdd-level-meter';
+        meter.setAttribute('aria-hidden', 'true');
+        const bars = [0, 1].map(() => {
+            const bar = document.createElement('div');
+            bar.className = 'bdd-level-bar';
+            const lit = document.createElement('div');
+            lit.style.height = '0%';
+            bar.appendChild(lit);
+            meter.appendChild(bar);
+            return lit;
+        });
+        body.append(track, meter);
+        const name = document.createElement('span');
+        name.className = 'bdd-label';
+        name.textContent = options.label || parameter.name;
+        const readout = document.createElement('span');
+        readout.className = 'bdd-value';
+        element.append(body, name, readout);
+        const text = options.format || ((value) => format(parameter, value));
+        const control = {
+            element,
+            parameter,
+            value: parameter.default ?? parameter.min,
+            set(value) {
+                if (!control.gesture.active) {
+                    show(value);
+                }
+            },
+            meter(left, right) {
+                bars[0].style.height = `${Math.min(1, Math.max(0, left)) * 100}%`;
+                bars[1].style.height = `${Math.min(1, Math.max(0, right)) * 100}%`;
+            },
+        };
+        function show(value) {
+            control.value = value;
+            const percent = `${toPosition(parameter, value) * 100}%`;
+            fill.style.height = percent;
+            thumb.style.bottom = percent;
+            readout.textContent = text(value);
+            describe(element, parameter, value);
+        }
+        control.gesture = makeGesture(parameter, (value) => {
+            show(value);
+            if (options.onChange) {
+                options.onChange(value);
+            }
+        });
+        attachDragging(element, parameter, control, { pixelsForFullRange: options.travel || 240 });
+        show(control.value);
+        return control;
+    }
+
     window.bdd = window.bdd || {};
     window.bdd.controls = {
         toPosition,
@@ -680,5 +909,9 @@
         readout,
         openMenu,
         closeMenu,
+        dial,
+        fader,
+        choice,
+        level,
     };
 })();
