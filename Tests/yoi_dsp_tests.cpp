@@ -1565,6 +1565,36 @@ void testMacros() {
         }
         CHECK(worst < 0.25, "POWER should keep the loudness (note %d): drifted %.2f LU", note, worst);
     }
+
+    // The same for VOICE, THROAT, CONTROL and WIDTH, from each one's default position.
+    auto playMacro = [](int note, AUParameterAddress macro, float value) {
+        auto k = makeKernel(kSampleRate, true, true, true);
+        k->setParameter(macro, value);
+        k->noteOn(note, 100);
+        std::vector<float> left, right;
+        std::vector<float> l(256), r(256);
+        float* buffers[2] = { l.data(), r.data() };
+        int64_t time = 0;
+        for (int done = 0; done < frames(2.0); done += 256) {
+            k->process(std::span<float*>(buffers, 2), time, 256);
+            time += 256;
+            left.insert(left.end(), l.begin(), l.end());
+            right.insert(right.end(), r.begin(), r.end());
+        }
+        return loudness(left, right, size_t(frames(0.5)));
+    };
+    struct Neutral { const char* name; AUParameterAddress address; float reference; };
+    for (const auto& macro : { Neutral{ "VOICE", macroVoice, 0.0f }, Neutral{ "THROAT", macroThroat, 100.0f },
+                               Neutral{ "CONTROL", macroControl, 0.0f }, Neutral{ "WIDTH", macroWidth, 0.0f } }) {
+        for (int note : { 28, 33, 45 }) {
+            const double base = playMacro(note, macro.address, macro.reference);
+            double worst = 0.0;
+            for (int step = 0; step <= 10; ++step) {
+                worst = std::max(worst, std::fabs(playMacro(note, macro.address, float(step * 10)) - base));
+            }
+            CHECK(worst < 0.25, "%s should keep the loudness (note %d): drifted %.2f LU", macro.name, note, worst);
+        }
+    }
 }
 
 void testWidthIsMonoCompatible() {

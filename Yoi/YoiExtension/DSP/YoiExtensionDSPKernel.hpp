@@ -98,7 +98,8 @@ public:
                                 &mAccelEndSmoother, &mAccelCurveSmoother, &mFoldAmountSmoother,
                                 &mCleanupMultipleSmoother, &mSubCrossoverSmoother, &mBoostSmoother,
                                 &mOttDepthSmoother, &mOttUpwardSmoother, &mWidthSmoother,
-                                &mMirrorSmoother, &mDriveSmoother, &mLockSmoother, &mPowerSmoother }) {
+                                &mMirrorSmoother, &mDriveSmoother, &mLockSmoother, &mPowerSmoother,
+                                &mVoiceMacroSmoother, &mControlMacroSmoother, &mWidthMacroSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
@@ -760,7 +761,14 @@ public:
             const double brightened = (boost > 0.0) ? mBoostLevel.process(tamed, boosted) : tamed;
 
             const double amp = mAmpEnvelope.next();
-            const double top = brightened * amp;
+            // Level stays with LEVEL: VOICE, CONTROL and WIDTH's measured make-up, on the main voice
+            // before the OTT (POWER's own make-up lives with the OTT; THROAT needs none).
+            const double note = double(pitch);
+            const double macroMakeup = std::exp2((gridMakeup(kVoiceMakeupDecibels, double(mVoiceMacroSmoother.next(mVoice)), note)
+                                                  + gridMakeup(kControlMakeupDecibels, double(mControlMacroSmoother.next(mControl)), note)
+                                                  + gridMakeup(kWidthMakeupDecibels, double(mWidthMacroSmoother.next(mWidth)), note))
+                                                 / 6.020599913);
+            const double top = brightened * amp * macroMakeup;
 
             // OTT-style compression on everything but the sub. Its crossover is in the path only
             // while it's in use, faded in and out so turning it on or off never clicks.
@@ -1001,6 +1009,49 @@ private:
     static constexpr std::array<double, 11> kPowerMakeupDecibels = {
         0.00, 0.75, 1.43, 2.08, 2.69, 3.26, 3.25, 3.25, 3.25, 3.25, 3.25
     };
+    /// VOICE, CONTROL and WIDTH's make-up (phase 2 of the redesign), in dB on the main voice, at
+    /// positions 0, 10, ... 100 % for E1, A1, E2, A2 and E3, interpolated by pitch between them (flat
+    /// outside). Measured 2026-09-29 in LUFS on the default patch, 140 BPM: at each point, the
+    /// main-voice gain that brings the whole output (the sub doing whatever the macro does to it)
+    /// back to the default's loudness. VOICE dips mid-crossfade and more on higher notes; CONTROL
+    /// loses about half a dB where DRIVE comes in; WIDTH's dimension expander adds loudness that
+    /// the sub's drop only partly takes back. THROAT needs none (within 0.19 LU as measured).
+    using MakeupGrid = std::array<std::array<double, 11>, 5>;
+    static constexpr std::array<double, 5> kMakeupNotes = { 28.0, 33.0, 40.0, 45.0, 52.0 };
+    static constexpr MakeupGrid kVoiceMakeupDecibels = {{
+        {{ 0.00, 0.26, 0.47, 0.64, 0.75, 0.80, 0.78, 0.71, 0.59, 0.41, 0.19 }},   // note 28
+        {{ 0.00, 0.25, 0.46, 0.62, 0.72, 0.76, 0.75, 0.68, 0.56, 0.39, 0.18 }},   // note 33
+        {{ 0.00, 0.47, 0.91, 1.31, 1.65, 1.91, 2.10, 2.20, 2.20, 2.11, 1.95 }},   // note 40
+        {{ 0.00, 0.45, 0.86, 1.23, 1.54, 1.77, 1.93, 2.00, 2.00, 1.91, 1.75 }},   // note 45
+        {{ 0.00, -0.03, -0.09, -0.18, -0.29, -0.42, -0.57, -0.74, -0.92, -1.11, -1.31 }},   // note 52
+    }};
+    static constexpr MakeupGrid kControlMakeupDecibels = {{
+        {{ 0.00, 0.04, 0.07, 0.10, 0.12, 0.14, 0.16, 0.19, 0.24, 0.33, 0.54 }},   // note 28
+        {{ 0.00, 0.04, 0.07, 0.10, 0.13, 0.15, 0.18, 0.21, 0.25, 0.35, 0.56 }},   // note 33
+        {{ 0.00, 0.02, 0.04, 0.06, 0.08, 0.09, 0.11, 0.14, 0.19, 0.27, 0.48 }},   // note 40
+        {{ 0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.12, 0.21, 0.41 }},   // note 45
+        {{ 0.00, 0.00, -0.00, -0.00, -0.01, -0.01, -0.00, 0.01, 0.04, 0.14, 0.37 }},   // note 52
+    }};
+    static constexpr MakeupGrid kWidthMakeupDecibels = {{
+        {{ 0.00, 0.02, -0.02, -0.10, -0.22, -0.38, -0.58, -0.80, -1.05, -1.32, -1.60 }},   // note 28
+        {{ 0.00, 0.05, 0.04, -0.01, -0.11, -0.25, -0.43, -0.64, -0.87, -1.12, -1.39 }},   // note 33
+        {{ 0.00, 0.10, 0.14, 0.13, 0.07, -0.03, -0.16, -0.33, -0.52, -0.74, -0.97 }},   // note 40
+        {{ 0.00, 0.12, 0.18, 0.18, 0.12, 0.02, -0.12, -0.30, -0.50, -0.73, -0.97 }},   // note 45
+        {{ 0.00, 0.08, 0.12, 0.11, 0.05, -0.05, -0.18, -0.34, -0.53, -0.74, -0.97 }},   // note 52
+    }};
+    static double gridMakeup(const MakeupGrid& grid, double position, double note) {
+        auto row = [&](size_t n) {
+            const double at = std::clamp(position, 0.0, 1.0) * 10.0;
+            const size_t index = std::min<size_t>(9, size_t(at));
+            return grid[n][index] + (grid[n][index + 1] - grid[n][index]) * (at - double(index));
+        };
+        if (note <= kMakeupNotes.front()) return row(0);
+        if (note >= kMakeupNotes.back()) return row(kMakeupNotes.size() - 1);
+        size_t n = 0;
+        while (note >= kMakeupNotes[n + 1]) ++n;
+        const double fraction = (note - kMakeupNotes[n]) / (kMakeupNotes[n + 1] - kMakeupNotes[n]);
+        return row(n) + (row(n + 1) - row(n)) * fraction;
+    }
     static constexpr double kPowerMakeupNote = 33.0;           // A1, where the curve was measured
     static constexpr double kPowerMakeupPerSemitone = 0.030;   // +3 % of the curve per semitone up
     static double powerMakeupDecibels(double power) {
@@ -1187,6 +1238,9 @@ private:
         mDriveSmoother.snap(mFilterDrive);
         mLockSmoother.snap(mLockAmount);
         mPowerSmoother.snap(mPower);
+        mVoiceMacroSmoother.snap(mVoice);
+        mControlMacroSmoother.snap(mControl);
+        mWidthMacroSmoother.snap(mWidth);
         mOttWeight.snap(mOttDepth > 0.0f ? 1.0f : 0.0f);
         mWidthSmoother.snap(mWidthAmount);
         mCleanupWeight.snap(mCleanupMode != 0 ? 1.0f : 0.0f);
@@ -1288,6 +1342,9 @@ private:
     bdd::Smoother mDriveSmoother;
     bdd::Smoother mLockSmoother;
     bdd::Smoother mPowerSmoother;
+    bdd::Smoother mVoiceMacroSmoother;
+    bdd::Smoother mControlMacroSmoother;
+    bdd::Smoother mWidthMacroSmoother;
     bdd::LinearRamp mOttWeight;
     bdd::Smoother mWidthSmoother;
     float mAppliedCrossoverOctaves = -1.0f;
