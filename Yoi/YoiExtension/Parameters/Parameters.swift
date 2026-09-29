@@ -14,6 +14,48 @@ import AudioToolbox
 private let logarithmic: AudioUnitParameterOptions = [.flag_IsWritable, .flag_IsReadable, .flag_DisplayLogarithmic]
 
 let YoiExtensionParameterSpecs = ParameterTreeSpec {
+    ParameterGroupSpec(identifier: "macros", name: "Macros") {
+        ParameterSpec(
+            address: .macroVoice,
+            identifier: "macroVoice",
+            name: "Voice",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .macroThroat,
+            identifier: "macroThroat",
+            name: "Throat",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 100.0
+        )
+        ParameterSpec(
+            address: .macroPower,
+            identifier: "macroPower",
+            name: "Power",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .macroControl,
+            identifier: "macroControl",
+            name: "Control",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+        ParameterSpec(
+            address: .macroWidth,
+            identifier: "macroWidth",
+            name: "Width",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
+    }
     ParameterGroupSpec(identifier: "output", name: "Output") {
         ParameterSpec(
             address: .outputLevel,
@@ -52,30 +94,6 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
         )
     }
     ParameterGroupSpec(identifier: "oscillators", name: "Oscillators") {
-        ParameterSpec(
-            address: .oscShape,
-            identifier: "oscShape",
-            name: "Osc Shape",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
-        )
-        ParameterSpec(
-            address: .subLevel,
-            identifier: "subLevel",
-            name: "Sub Level",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 75.0
-        )
-        ParameterSpec(
-            address: .subShape,
-            identifier: "subShape",
-            name: "Sub Shape",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
-        )
         ParameterSpec(
             address: .subOctave,
             identifier: "subOctave",
@@ -126,14 +144,6 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             address: .filterMirror,
             identifier: "filterMirror",
             name: "Mirror",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
-        )
-        ParameterSpec(
-            address: .filterDrive,
-            identifier: "filterDrive",
-            name: "Filter Drive",
             units: .percent,
             valueRange: 0.0...100.0,
             defaultValue: 0.0
@@ -267,23 +277,6 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueStrings: ["Off", "S&H", "Downsample"]
         )
         ParameterSpec(
-            address: .dsRate,
-            identifier: "dsRate",
-            name: "S&H Rate",
-            units: .hertz,
-            valueRange: 1300.0...6000.0,
-            defaultValue: 1400.0,
-            flags: logarithmic
-        )
-        ParameterSpec(
-            address: .dsAmount,
-            identifier: "dsAmount",
-            name: "Downsample Amount",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 45.0
-        )
-        ParameterSpec(
             address: .foldAmount,
             identifier: "foldAmount",
             name: "Fold",
@@ -310,48 +303,16 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueStrings: ["Off", "On"]
         )
         ParameterSpec(
-            address: .cleanupMultiple,
-            identifier: "cleanupMultiple",
-            name: "Clean-up Multiple",
-            units: .ratio,
-            valueRange: 1.0...16.0,
-            defaultValue: 5.0,
-            flags: logarithmic
-        )
-        ParameterSpec(
             address: .dsLock,
             identifier: "dsLock",
             name: "S&H Lock",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            units: .indexed,
+            valueRange: 0...1,
+            defaultValue: 0,
+            valueStrings: ["Free", "Lock"]
         )
     }
     ParameterGroupSpec(identifier: "finish", name: "Finish") {
-        ParameterSpec(
-            address: .boostAmount,
-            identifier: "boostAmount",
-            name: "Harmonic Boost",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
-        )
-        ParameterSpec(
-            address: .ottDepth,
-            identifier: "ottDepth",
-            name: "OTT",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
-        )
-        ParameterSpec(
-            address: .widthAmount,
-            identifier: "widthAmount",
-            name: "Width",
-            units: .percent,
-            valueRange: 0.0...100.0,
-            defaultValue: 0.0
-        )
         ParameterSpec(
             address: .ottTime,
             identifier: "ottTime",
@@ -359,14 +320,6 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .percent,
             valueRange: 0.0...100.0,
             defaultValue: 50.0
-        )
-        ParameterSpec(
-            address: .ottUpward,
-            identifier: "ottUpward",
-            name: "OTT Upward",
-            units: .percent,
-            valueRange: 0.0...200.0,
-            defaultValue: 100.0
         )
     }
 }

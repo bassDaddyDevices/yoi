@@ -98,7 +98,7 @@ public:
                                 &mAccelEndSmoother, &mAccelCurveSmoother, &mFoldAmountSmoother,
                                 &mCleanupMultipleSmoother, &mSubCrossoverSmoother, &mBoostSmoother,
                                 &mOttDepthSmoother, &mOttUpwardSmoother, &mWidthSmoother,
-                                &mMirrorSmoother, &mDriveSmoother, &mLockSmoother }) {
+                                &mMirrorSmoother, &mDriveSmoother, &mLockSmoother, &mPowerSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
@@ -260,6 +260,36 @@ public:
             case YoiExtensionParameterAddress::ottUpward:
                 mOttUpward = std::clamp(value * 0.01f, 0.0f, 2.0f);
                 break;
+            // Macros (YOI_DOCS decisions/redesign-macros). Each is the only host control for the
+            // stages it covers and writes their values through the same cases the tests use.
+            case YoiExtensionParameterAddress::macroVoice:
+                mVoice = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                setParameter(YoiExtensionParameterAddress::oscShape, mVoice * 100.0f);
+                setParameter(YoiExtensionParameterAddress::subShape, mVoice * 100.0f);
+                break;
+            case YoiExtensionParameterAddress::macroThroat:
+                mThroat = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                setParameter(YoiExtensionParameterAddress::dsRate,
+                             float(kThroatLightRate * std::pow(kThroatFullRate / kThroatLightRate, double(mThroat))));
+                setParameter(YoiExtensionParameterAddress::dsAmount,
+                             float(kThroatLightAmount + (kThroatFullAmount - kThroatLightAmount) * double(mThroat)));
+                break;
+            case YoiExtensionParameterAddress::macroPower:
+                mPower = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                setParameter(YoiExtensionParameterAddress::ottDepth, std::min(1.0f, 2.0f * mPower) * 100.0f);
+                setParameter(YoiExtensionParameterAddress::ottUpward, 100.0f + std::max(0.0f, 2.0f * mPower - 1.0f) * 100.0f);
+                break;
+            case YoiExtensionParameterAddress::macroControl:
+                mControl = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                setParameter(YoiExtensionParameterAddress::cleanupMultiple, float(kControlCleanupWidest * std::exp2(-double(mControl))));
+                setParameter(YoiExtensionParameterAddress::boostAmount, mControl * kControlBoostMaximum);
+                setParameter(YoiExtensionParameterAddress::filterDrive, float(std::pow(double(mControl), kControlDriveCurve)) * 100.0f);
+                break;
+            case YoiExtensionParameterAddress::macroWidth:
+                mWidth = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                setParameter(YoiExtensionParameterAddress::widthAmount, mWidth * 100.0f);
+                setParameter(YoiExtensionParameterAddress::subLevel, kWidthSubLevelNarrow + (kWidthSubLevelWide - kWidthSubLevelNarrow) * mWidth);
+                break;
             case YoiExtensionParameterAddress::filterMirror:
                 mMirrorLevel = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 break;
@@ -267,7 +297,7 @@ public:
                 mFilterDrive = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 break;
             case YoiExtensionParameterAddress::dsLock:
-                mLockAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                mLockAmount = (value >= 0.5f) ? 1.0f : 0.0f;   // a switch: Free or Lock
                 break;
             case YoiExtensionParameterAddress::cleanupMode:
                 mCleanupMode = std::clamp(int(std::lround(value)), 0, 1);
@@ -316,9 +346,14 @@ public:
             case YoiExtensionParameterAddress::widthAmount: return mWidthAmount * 100.0f;
             case YoiExtensionParameterAddress::ottTime: return mOttTime;
             case YoiExtensionParameterAddress::ottUpward: return mOttUpward * 100.0f;
+            case YoiExtensionParameterAddress::macroVoice: return mVoice * 100.0f;
+            case YoiExtensionParameterAddress::macroThroat: return mThroat * 100.0f;
+            case YoiExtensionParameterAddress::macroPower: return mPower * 100.0f;
+            case YoiExtensionParameterAddress::macroControl: return mControl * 100.0f;
+            case YoiExtensionParameterAddress::macroWidth: return mWidth * 100.0f;
             case YoiExtensionParameterAddress::filterMirror: return mMirrorLevel * 100.0f;
             case YoiExtensionParameterAddress::filterDrive: return mFilterDrive * 100.0f;
-            case YoiExtensionParameterAddress::dsLock: return mLockAmount * 100.0f;
+            case YoiExtensionParameterAddress::dsLock: return mLockAmount;
             case YoiExtensionParameterAddress::cleanupMode: return AUValue(mCleanupMode);
             case YoiExtensionParameterAddress::cleanupMultiple: return mCleanupMultiple;
             default: return 0.f;
@@ -672,7 +707,8 @@ public:
             const double mirrorOctaves = double(cutoffOctaves) - double(envAmount) * double(drawing);
             mMirrorFilter.setCoefficients(std::exp2(mirrorOctaves), filterQ, mSampleRate);
             const auto mirrored = (drive > 0.0) ? mMirrorFilter.processDriven(mix, driveLevel) : mMirrorFilter.process(mix);
-            filteredVoice += double(mMirrorSmoother.next(mMirrorLevel)) * mirrored.bandPass;
+            // Band-pass only: in low-pass it just turns the low-pass into a band-pass (the owner, in Live).
+            filteredVoice += double(mMirrorSmoother.next(mMirrorLevel)) * double(bandPassAmount) * mirrored.bandPass;
             if (mActiveFoldPosition == foldPreDownsample) {
                 filteredVoice = kOscillatorHeadroom * applyFold(filteredVoice / kOscillatorHeadroom, foldDepth, positionBlend);
             }
@@ -730,10 +766,11 @@ public:
             // while it's in use, faded in and out so turning it on or off never clicks.
             const double ottDepth = double(mOttDepthSmoother.next(mOttDepth));
             const double ottUpward = double(mOttUpwardSmoother.next(mOttUpward));
+            const double powerAmount = double(mPowerSmoother.next(mPower));
             const double ottWeight = double(mOttWeight.next(mOttDepth > 0.0f ? 1.0f : 0.0f));
             double compressed = top;
             if (ottWeight > 0.0) {
-                const double makeup = std::exp2(ottDepth * kOttMakeupDecibels / 6.020599913);
+                const double makeup = std::exp2(powerMakeupDecibels(powerAmount, double(pitch)) / 6.020599913);
                 compressed = top + ottWeight * (mOtt.process(top, ottDepth, ottUpward) * makeup - top);
             }
 
@@ -933,11 +970,46 @@ private:
     /// The offset the post-downsample fold adds before folding and takes away after, which folds
     /// the two halves of the wave differently (the owner's Max experiment used 0.15).
     static constexpr double kFoldAsymmetry = 0.15;
-    /// Make-up gain for the OTT-style compressor at full depth. Its downward stage pulls the loud
-    /// low band down (5 to 7 dB overall at full depth); this puts the level back, so turning OTT
-    /// up adds density and bite rather than a change in level. Measured on the default sound,
-    /// where full depth then stays within 0.3 dB and peaks just under the limiter's knee.
-    static constexpr double kOttMakeupDecibels = 5.0;
+    /// Macros (YOI_DOCS decisions/redesign-macros).
+    /// THROAT, the CHARACTER pad's X: from the lightest break-up to the full throat, never truly
+    /// clean. S&H from 6 kHz down to 1.4 kHz (log), Downsample from 12 % up to 70 % (past 70 % it
+    /// "just gets dumb"); the two track each other closely along the whole axis.
+    static constexpr double kThroatLightRate = 6000.0;
+    static constexpr double kThroatFullRate = 1400.0;
+    static constexpr double kThroatLightAmount = 12.0;
+    static constexpr double kThroatFullAmount = 70.0;
+    /// CONTROL, raw to tight: clean-up from 16x to 8x (past 8x it kills the top end), BOOST up
+    /// to 40 %, and DRIVE on a curve, uncapped (it does a lot near full): 2 is squared, 3 cubed.
+    static constexpr double kControlCleanupWidest = 16.0;
+    static constexpr float kControlBoostMaximum = 40.0f;
+    static constexpr double kControlDriveCurve = 2.0;
+    /// WIDTH: the sub gives way to the dimension expander. Sub Level at WIDTH 0 and at full; the
+    /// full-width value is a first guess, for the owner's ears.
+    static constexpr float kWidthSubLevelNarrow = 75.0f;
+    static constexpr float kWidthSubLevelWide = 50.0f;
+    /// POWER's make-up in dB at POWER 0, 10, ... 100 %, so POWER changes density and never
+    /// loudness. It acts on the main voice only (the sub never goes through the OTT), so it was
+    /// measured there: LUFS (K-weighted) of the default patch with the sub off, 140 BPM, at A1.
+    /// The OTT takes more from higher notes, which put more of their energy into its mid band;
+    /// the ratio between notes was the same at every step and linear in pitch, so the curve is
+    /// scaled by the note (kPowerMakeupPerSemitone). Measured 2026-09-29: E1 2.79, A1 3.26 and
+    /// A2 4.46 dB at full. The loss grows while OTT DEPTH rises (first half) and is flat while
+    /// OTT UP rises (second half). This replaces the OTT's fixed 5 dB make-up, measured in RMS.
+    static constexpr std::array<double, 11> kPowerMakeupDecibels = {
+        0.00, 0.75, 1.43, 2.08, 2.69, 3.26, 3.25, 3.25, 3.25, 3.25, 3.25
+    };
+    static constexpr double kPowerMakeupNote = 33.0;           // A1, where the curve was measured
+    static constexpr double kPowerMakeupPerSemitone = 0.030;   // +3 % of the curve per semitone up
+    static double powerMakeupDecibels(double power) {
+        const double position = std::clamp(power, 0.0, 1.0) * 10.0;
+        const size_t index = std::min<size_t>(9, size_t(position));
+        const double fraction = position - double(index);
+        return kPowerMakeupDecibels[index] + (kPowerMakeupDecibels[index + 1] - kPowerMakeupDecibels[index]) * fraction;
+    }
+    static double powerMakeupDecibels(double power, double note) {
+        const double scale = std::clamp(1.0 + kPowerMakeupPerSemitone * (note - kPowerMakeupNote), 0.5, 2.0);
+        return powerMakeupDecibels(power) * scale;
+    }
     /// LAB DRIVE: the level the filter's resonance loop saturates at with DRIVE at full (twice the
     /// voice's own headroom, so only a resonant peak reaches it), and how many octaves higher it
     /// sits at 0 % (far above anything the voice reaches). At 0.1 it strangled the whole low-pass
@@ -1111,6 +1183,7 @@ private:
         mMirrorSmoother.snap(mMirrorLevel);
         mDriveSmoother.snap(mFilterDrive);
         mLockSmoother.snap(mLockAmount);
+        mPowerSmoother.snap(mPower);
         mOttWeight.snap(mOttDepth > 0.0f ? 1.0f : 0.0f);
         mWidthSmoother.snap(mWidthAmount);
         mCleanupWeight.snap(mCleanupMode != 0 ? 1.0f : 0.0f);
@@ -1156,12 +1229,12 @@ private:
     float mAccelCurve = 0.0f;
     int mDownsampleMode = downsampleSampleHold;
     float mSampleHoldRate = 1400.0f;
-    float mDownsampleAmount = 45.0f;
+    float mDownsampleAmount = 70.0f;   // where THROAT's default (the full throat) puts it
     float mFoldAmount = 0.0f;
     int mFoldPosition = foldPostDownsample;
     int mActiveFoldPosition = foldPostDownsample;
     int mCleanupMode = 1;
-    float mCleanupMultiple = 5.0f;
+    float mCleanupMultiple = 16.0f;   // where CONTROL's default (raw) puts it
     float mBoostAmount = 0.0f;
     float mOttDepth = 0.0f;
     float mWidthAmount = 0.0f;
@@ -1172,6 +1245,11 @@ private:
     float mFilterDrive = 0.0f;
     float mLockAmount = 0.0f;
     double mLockMultiple = 0.0;
+    float mVoice = 0.0f;
+    float mThroat = 1.0f;     // the full throat: S&H at 1.4 kHz, as YOI has always started
+    float mPower = 0.0f;
+    float mControl = 0.0f;
+    float mWidth = 0.0f;
 
     float mBendPosition = 0.0f;
 
@@ -1206,6 +1284,7 @@ private:
     bdd::Smoother mMirrorSmoother;
     bdd::Smoother mDriveSmoother;
     bdd::Smoother mLockSmoother;
+    bdd::Smoother mPowerSmoother;
     bdd::LinearRamp mOttWeight;
     bdd::Smoother mWidthSmoother;
     float mAppliedCrossoverOctaves = -1.0f;

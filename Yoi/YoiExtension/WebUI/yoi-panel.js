@@ -37,6 +37,8 @@
      * leaves a slot empty. A knob with two `ids` is one knob that shows whichever parameter its
      * switch has selected.
      */
+    // Interim wiring for the macro redesign (YOI_DOCS decisions/redesign-macros): the macros and
+    // the CHARACTER pad's axes on the old pages, so YOI stays playable until the new panel.
     const PAGES = [
         {
             name: 'YOI',
@@ -51,15 +53,13 @@
                 },
                 {
                     knobs: [
-                        { ids: ['dsRate', 'dsAmount'], label: 'DOWNSAMPLE', color: YELLOW },
-                        { id: 'cleanupMultiple', label: 'CLEAN-UP', color: YELLOW },
+                        { id: 'macroThroat', label: 'THROAT', color: YELLOW },
+                        { id: 'macroControl', label: 'CONTROL', color: YELLOW },
                         { id: 'foldAmount', label: 'FOLD', color: ORANGE },
                     ],
                     switches: [
-                        // No OFF on the panel (the owner's call); the host can still set it.
-                        { id: 'dsMode', labels: ['kHz', '%'], values: [1, 2], color: YELLOW, column: '1' },
+                        { id: 'dsMode', labels: ['S&H', 'DS'], values: [1, 2], color: YELLOW, column: '1' },
                         { id: 'cleanupMode', labels: ['OFF', 'ON'], color: YELLOW, column: '2' },
-                        // Before the filter, before the downsampler, after it (uneven).
                         { id: 'foldPosition', labels: ['FILT', 'PRE', 'POST'], color: ORANGE, column: '3' },
                     ],
                 },
@@ -70,9 +70,9 @@
             rows: [
                 {
                     knobs: [
-                        { id: 'oscShape', label: 'SHAPE', color: GREEN, format: percentOr('Saw', 'Square') },
-                        { id: 'subLevel', label: 'SUB', color: GREEN },
-                        { id: 'subShape', label: 'SUB SHAPE', color: GREEN, format: percentOr('Sine', 'Triangle') },
+                        { id: 'macroVoice', label: 'VOICE', color: GREEN, format: percentOr('Growl', 'Digital') },
+                        null,
+                        null,
                     ],
                     switches: [{ id: 'subOctave', labels: ['-1 OCT', '-2 OCT'], color: GREEN, column: '2' }],
                 },
@@ -87,36 +87,22 @@
             ],
         },
         {
-            // The amp envelope isn't on the panel: its defaults suit YOI, and the drawn envelope
-            // does the moving. Its parameters are still there for the host.
             name: 'FX',
             rows: [
                 {
                     knobs: [
-                        { id: 'boostAmount', label: 'BOOST', color: PURPLE },
-                        { id: 'ottDepth', label: 'OTT', color: PURPLE },
-                        { id: 'widthAmount', label: 'WIDTH', color: PURPLE },
+                        { id: 'macroPower', label: 'POWER', color: PURPLE },
+                        { id: 'macroWidth', label: 'WIDTH', color: PURPLE },
+                        { id: 'outputLevel', label: 'LEVEL', color: CREAM },
                     ],
                 },
                 {
                     knobs: [
                         { id: 'ottTime', label: 'OTT TIME', color: PURPLE, format: ottRelease },
-                        { id: 'ottUpward', label: 'OTT UP', color: PURPLE },
-                        { id: 'outputLevel', label: 'LEVEL', color: CREAM },
-                    ],
-                },
-            ],
-        },
-        {
-            // Experiments to A/B by ear. Whatever earns its place moves to its home page.
-            name: 'LAB',
-            rows: [
-                {
-                    knobs: [
-                        { id: 'dsLock', label: 'LOCK', color: YELLOW },
                         { id: 'filterMirror', label: 'MIRROR', color: BLUE },
-                        { id: 'filterDrive', label: 'DRIVE', color: BLUE },
+                        null,
                     ],
+                    switches: [{ id: 'dsLock', labels: ['FREE', 'LOCK'], color: YELLOW, column: '3' }],
                 },
             ],
         },
@@ -374,16 +360,10 @@
         const v = values;
         // One DOWNSAMPLE knob: the S&H rate in kHz mode, the amount in % mode.
         const downsampleMode = Math.round(v.dsMode);
-        setHidden('dsRate', downsampleMode === 2);
-        setHidden('dsAmount', downsampleMode !== 2);
-        setDim('dsRate', downsampleMode === 0);
-        setDim('cleanupMultiple', v.cleanupMode < 0.5);
         setDim('foldPosition', v.foldAmount <= 0);
         setDim('glideMode', v.glideTime <= 0);
-        setDim('subShape', v.subLevel <= 0);
-        setDim('subOctave', v.subLevel <= 0);
-        setDim('ottTime', v.ottDepth <= 0);
-        setDim('ottUpward', v.ottDepth <= 0);
+        setDim('ottTime', v.macroPower <= 0);
+        setDim('filterMirror', v.filterMode < 0.5);   // MIRROR only sounds in BP
         setDim('dsLock', downsampleMode !== 1);   // LOCK only acts on S&H
 
         const free = v.envTimeMode >= 0.5;

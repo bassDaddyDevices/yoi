@@ -179,10 +179,11 @@ void testDefaultsMatchParameterTree() {
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
-        { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 45.0f },
-        { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 5.0f },
+        { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 70.0f },
+        { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 16.0f },
         { boostAmount, 0.0f }, { ottDepth, 0.0f }, { widthAmount, 0.0f }, { ottTime, 50.0f },
-        { ottUpward, 100.0f }, { filterMirror, 0.0f }, { filterDrive, 0.0f }, { dsLock, 0.0f },
+        { ottUpward, 100.0f }, { filterMirror, 0.0f }, { filterDrive, 0.0f }, { dsLock, 0.0f }, { macroVoice, 0.0f }, { macroThroat, 100.0f }, { macroPower, 0.0f },
+        { macroControl, 0.0f }, { macroWidth, 0.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -220,7 +221,7 @@ void testParametersRoundTrip() {
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
         { foldAmount, 35.0f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
         { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f }, { ottTime, 20.0f },
-        { ottUpward, 150.0f }, { filterMirror, 55.0f }, { filterDrive, 30.0f }, { dsLock, 70.0f },
+        { ottUpward, 150.0f }, { filterMirror, 55.0f }, { filterDrive, 30.0f }, { dsLock, 1.0f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -885,6 +886,7 @@ void testSampleCountDownsampler() {
 std::vector<float> playThroughDownsampler(float mode, double sampleRate = kSampleRate) {
     auto kernel = makeKernel(sampleRate, false, true);
     kernel->setParameter(dsMode, mode);
+    kernel->setParameter(dsAmount, 45.0f);   // the amount these hold lengths were worked out for
     kernel->setParameter(subLevel, 0.0f);   // the sub joins after the downsampler, over its steps
     kernel->noteOn(40, 100);
     return render(*kernel, frames(0.5, sampleRate));
@@ -937,6 +939,7 @@ void testDownsamplerComesAfterTheFilter() {
 void testDownsamplerModeSwitchSettles() {
     auto kernel = makeKernel(kSampleRate, false, true);
     kernel->setParameter(dsMode, 0.0f);
+    kernel->setParameter(dsAmount, 45.0f);   // the amount these hold lengths were worked out for
     kernel->setParameter(subLevel, 0.0f);   // the sub joins after the downsampler, over its steps
     kernel->noteOn(40, 100);
     render(*kernel, frames(0.2));
@@ -1308,7 +1311,7 @@ void testOttEvensOutTheLevel() {
         kernel->setParameter(envAmount, 6.0f);
         kernel->setParameter(envTimeMode, 1.0f);    // Free, so the drawing moves without a host
         kernel->setParameter(envFreeTime, 400.0f);
-        kernel->setParameter(ottDepth, depth);
+        kernel->setParameter(macroPower, depth * 0.5f);   // POWER 50 % is OTT DEPTH 100 % at UP 100 %, as written against
         kernel->noteOn(40, 100);
         const auto output = render(*kernel, frames(2.0));
         const size_t from = size_t(frames(0.3));
@@ -1326,8 +1329,7 @@ void testOttEvensOutTheLevel() {
     CHECK(squashed.swing < dry.swing - 1.0, "OTT should narrow the level swing: %.1f dB against %.1f dB", squashed.swing, dry.swing);
     CHECK(squashed.brightness > dry.brightness + 2.0, "OTT should bring the top end forward: %.1f dB against %.1f dB",
           squashed.brightness, dry.brightness);
-    CHECK(std::fabs(squashed.level - dry.level) < 2.0, "OTT's make-up should keep the level: %.1f dB against %.1f dB",
-          squashed.level, dry.level);
+    // Its level is POWER's job now, measured in LUFS on the default patch: see testMacros.
     CHECK(squashed.highest <= 1.0f, "OTT's output should stay inside full scale: peak %f", squashed.highest);
 }
 
@@ -1337,6 +1339,7 @@ void testOttTimeAndUpward() {
     struct Result { double swing, brightness; float highest; std::vector<float> output; };
     auto measure = [](float time, float upward, bool setThem) {
         auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(cleanupMultiple, 5.0f);   // the clean-up this was measured with
         kernel->setParameter(subLevel, 0.0f);
         kernel->setParameter(subCrossover, 50.0f);
         kernel->setParameter(envAmount, 6.0f);
@@ -1472,9 +1475,96 @@ void testLabExperiments() {
 
     auto kernel = makeKernel();
     kernel->setParameter(dsLock, 150.0f);
-    CHECK(kernel->getParameter(dsLock) == 100.0f, "LOCK should stop at 100 %%, got %f", kernel->getParameter(dsLock));
+    CHECK(kernel->getParameter(dsLock) == 1.0f, "LOCK is a switch: anything past halfway is Lock, got %f", kernel->getParameter(dsLock));
     kernel->setParameter(filterDrive, -5.0f);
     CHECK(kernel->getParameter(filterDrive) == 0.0f, "DRIVE should start at 0 %%, got %f", kernel->getParameter(filterDrive));
+}
+
+/// Loudness in LUFS (ITU-R BS.1770 K-weighting at 48 kHz, no gating: the tests play steady notes).
+double loudness(const std::vector<float>& left, const std::vector<float>& right, size_t from) {
+    struct Biquad {
+        double b0, b1, b2, a1, a2, z1 = 0.0, z2 = 0.0;
+        double run(double x) { const double y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
+    };
+    double sum = 0.0;
+    for (const auto* channel : { &left, &right }) {
+        Biquad shelf{ 1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585 };
+        Biquad highPass{ 1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621 };
+        double meanSquare = 0.0;
+        for (size_t i = 0; i < channel->size(); ++i) {
+            const double y = highPass.run(shelf.run((*channel)[i]));
+            if (i >= from) meanSquare += y * y;
+        }
+        sum += meanSquare / double(channel->size() - from);
+    }
+    return -0.691 + 10.0 * std::log10(sum);
+}
+
+void testMacros() {
+    // The macros (YOI_DOCS decisions/redesign-macros) write the stages they cover.
+    auto kernel = makeKernel();
+    auto near = [&](AUParameterAddress address, float expected) {
+        const float actual = kernel->getParameter(address);
+        CHECK(std::fabs(actual - expected) < 0.01f, "address %llu reads %f, expected %f", (unsigned long long)address, actual, expected);
+    };
+    kernel->setParameter(macroVoice, 50.0f);
+    near(oscShape, 50.0f); near(subShape, 50.0f);
+    kernel->setParameter(macroThroat, 0.0f);
+    near(dsRate, 6000.0f); near(dsAmount, 12.0f);
+    kernel->setParameter(macroThroat, 50.0f);
+    near(dsRate, float(std::sqrt(6000.0 * 1400.0))); near(dsAmount, 41.0f);   // log-spaced rate, linear amount
+    kernel->setParameter(macroThroat, 100.0f);
+    near(dsRate, 1400.0f); near(dsAmount, 70.0f);
+    kernel->setParameter(macroPower, 25.0f);
+    near(ottDepth, 50.0f); near(ottUpward, 100.0f);
+    kernel->setParameter(macroPower, 75.0f);
+    near(ottDepth, 100.0f); near(ottUpward, 150.0f);
+    kernel->setParameter(macroControl, 0.0f);
+    near(cleanupMultiple, 16.0f); near(boostAmount, 0.0f); near(filterDrive, 0.0f);
+    kernel->setParameter(macroControl, 50.0f);
+    near(cleanupMultiple, float(16.0 / std::sqrt(2.0))); near(boostAmount, 20.0f); near(filterDrive, 25.0f);   // drive squared
+    kernel->setParameter(macroControl, 100.0f);
+    near(cleanupMultiple, 8.0f); near(boostAmount, 40.0f); near(filterDrive, 100.0f);
+    kernel->setParameter(macroWidth, 0.0f);
+    near(widthAmount, 0.0f); near(subLevel, 75.0f);
+    kernel->setParameter(macroWidth, 100.0f);
+    near(widthAmount, 100.0f); near(subLevel, 50.0f);
+
+    // MIRROR only sounds in band-pass: in low-pass it changes nothing at all.
+    auto playMirrorInLowPass = [](float mirror) {
+        auto k = makeKernel(kSampleRate, true, true, true);
+        k->setParameter(filterMirror, mirror);
+        k->noteOn(33, 100);
+        return render(*k, frames(0.5));
+    };
+    CHECK(playMirrorInLowPass(100.0f) == playMirrorInLowPass(0.0f), "MIRROR should do nothing in LP");
+
+    // POWER changes density, never loudness: in LUFS, every step stays within 0.25 LU of POWER 0
+    // (measured: within 0.04 LU across six notes, three of them not in the fit).
+    auto playPower = [](int note, float power) {
+        auto k = makeKernel(kSampleRate, true, true, true);
+        k->setParameter(macroPower, power);
+        k->noteOn(note, 100);
+        std::vector<float> left, right;
+        std::vector<float> l(256), r(256);
+        float* buffers[2] = { l.data(), r.data() };
+        int64_t time = 0;
+        for (int done = 0; done < frames(2.0); done += 256) {
+            k->process(std::span<float*>(buffers, 2), time, 256);
+            time += 256;
+            left.insert(left.end(), l.begin(), l.end());
+            right.insert(right.end(), r.begin(), r.end());
+        }
+        return loudness(left, right, size_t(frames(0.5)));
+    };
+    for (int note : { 33, 28, 45 }) {
+        const double base = playPower(note, 0.0f);
+        double worst = 0.0;
+        for (int step = 1; step <= 10; ++step) {
+            worst = std::max(worst, std::fabs(playPower(note, float(step * 10)) - base));
+        }
+        CHECK(worst < 0.25, "POWER should keep the loudness (note %d): drifted %.2f LU", note, worst);
+    }
 }
 
 void testWidthIsMonoCompatible() {
@@ -1572,6 +1662,7 @@ int main() {
     testOttEvensOutTheLevel();
     testOttTimeAndUpward();
     testLabExperiments();
+    testMacros();
     testWidthIsMonoCompatible();
     testFinishExtremesStayBounded();
     testCleanupFilter();

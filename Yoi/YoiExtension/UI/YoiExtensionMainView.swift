@@ -17,6 +17,13 @@ struct YoiExtensionMainView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                section("Macros") {
+                    ParameterSlider(param: parameterTree.macros.macroVoice)
+                    ParameterSlider(param: parameterTree.macros.macroThroat)
+                    ParameterSlider(param: parameterTree.macros.macroPower)
+                    ParameterSlider(param: parameterTree.macros.macroControl)
+                    ParameterSlider(param: parameterTree.macros.macroWidth)
+                }
                 section("Drawn Envelope") {
                     if let audioUnit {
                         Menu("Load Drawing") {
@@ -38,8 +45,6 @@ struct YoiExtensionMainView: View {
                 }
                 section("Downsampler") {
                     ParameterPicker(param: parameterTree.grit.dsMode, options: ["Off", "S&H", "Downsample"])
-                    ParameterSlider(param: parameterTree.grit.dsRate, logarithmic: true)
-                    ParameterSlider(param: parameterTree.grit.dsAmount)
                 }
                 section("Wavefolder") {
                     ParameterSlider(param: parameterTree.grit.foldAmount)
@@ -47,24 +52,15 @@ struct YoiExtensionMainView: View {
                 }
                 section("Clean-up Filter") {
                     ParameterPicker(param: parameterTree.grit.cleanupMode, options: ["Off", "On"])
-                    ParameterSlider(param: parameterTree.grit.cleanupMultiple, logarithmic: true)
                 }
                 section("Finish") {
-                    ParameterSlider(param: parameterTree.finish.boostAmount)
-                    ParameterSlider(param: parameterTree.finish.ottDepth)
-                    ParameterSlider(param: parameterTree.finish.widthAmount)
                     ParameterSlider(param: parameterTree.finish.ottTime)
-                    ParameterSlider(param: parameterTree.finish.ottUpward)
                 }
                 section("Lab") {
-                    ParameterSlider(param: parameterTree.grit.dsLock)
+                    ParameterPicker(param: parameterTree.grit.dsLock, options: ["Free", "Lock"])
                     ParameterSlider(param: parameterTree.filter.filterMirror)
-                    ParameterSlider(param: parameterTree.filter.filterDrive)
                 }
                 section("Oscillators") {
-                    ParameterSlider(param: parameterTree.oscillators.oscShape)
-                    ParameterSlider(param: parameterTree.oscillators.subLevel)
-                    ParameterSlider(param: parameterTree.oscillators.subShape)
                     ParameterPicker(param: parameterTree.oscillators.subOctave, options: ["-1 Oct", "-2 Oct"])
                     ParameterSlider(param: parameterTree.oscillators.subCrossover, logarithmic: true)
                 }
