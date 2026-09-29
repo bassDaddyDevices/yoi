@@ -62,9 +62,9 @@
          -> filter cutoff = CUTOFF lowered by Amount x (1 - drawing), in octaves
 
  The downsampler sits straight after the resonant filter on purpose: it folds the filter's
- resonant peak back down into throaty, vocal tones, which is where YOI gets its sound. Later
- stage adds the vowel filter. The wavefolder adds harmonics either before the filter or before the
- downsampler: the more harmonics going in, the more bite comes out.
+ resonant peak back down into throaty, vocal tones, which is where YOI gets its sound. The
+ wavefolder adds harmonics before the filter, before the downsampler or (the default) after it:
+ the more harmonics going in, the more bite comes out.
 
  Parameters only ever store their new target here, from whichever thread sets them. Anything
  derived from them (envelope coefficients, smoothed values) is recalculated on the render thread,
@@ -599,8 +599,9 @@ public:
             const float sub = mSubOscillator.next(increment * subRatio, subMorph);
 
             // Crossover, as in the Max device: the sub keeps the low end below X-OVER and the
-            // oscillator gives it up, so the two never stack there. With no sub there's nothing to
-            // split, so the oscillator's high-pass fades out over the bottom of the Sub Level knob.
+            // oscillator gives it up, so the two never stack there. That holds at every Sub Level:
+            // with the sub at 0 the low end is simply gone. (It used to fade the split out below 10 %,
+            // which brought 30 dB of fundamental back through the filter and downsampler: YOI-001.)
             const float crossoverOctaves = mSubCrossoverSmoother.next(crossoverTarget);
             if (crossoverOctaves != mAppliedCrossoverOctaves) {
                 mAppliedCrossoverOctaves = crossoverOctaves;
@@ -608,8 +609,7 @@ public:
                 mMainHighPass.setCutoff(crossoverHertz, mSampleRate);
                 mSubLowPass.setCutoff(crossoverHertz, mSampleRate);
             }
-            const double splitDepth = std::min(1.0, double(subGain) / kCrossoverFadeLevel);
-            const double mainAboveSub = double(main) + (mMainHighPass.process(double(main)) - double(main)) * splitDepth;
+            const double mainAboveSub = mMainHighPass.process(double(main));
             const double subBelow = mSubLowPass.process(double(sub));
 
             // Wavefolder settings. Moving it between positions fades it out, swaps, and fades it
@@ -633,7 +633,7 @@ public:
             // The top of the drawing is the CUTOFF setting; the bottom is Amount octaves below it.
             const double modulatedOctaves = double(cutoffOctaves) - double(envAmount) * (1.0 - double(drawing));
             mFilter.setCoefficients(std::exp2(modulatedOctaves),
-                                    bdd::StateVariableFilter::qForResonance(resonanceAmount),
+                                    bdd::StateVariableFilter::qForResonance(resonanceRange(resonanceAmount)),
                                     mSampleRate);
             const auto filtered = mFilter.process(mix);
             double filteredVoice = filtered.lowPass + (filtered.bandPass - filtered.lowPass) * double(bandPassAmount);
@@ -869,9 +869,18 @@ private:
     /// How long the fold's level matching listens before adjusting: long next to a bass cycle,
     /// short next to a phrase.
     static constexpr double kFoldLevelSeconds = 0.08;
-    /// Sub Level (0...1) at which the crossover is fully in; below it the oscillator's high-pass
-    /// fades out, so with the sub off the oscillator keeps all its low end.
-    static constexpr double kCrossoverFadeLevel = 0.1;
+    /// The part of the filter's resonance range the RES knob covers, from the owner's ears
+    /// (ADJUST-001): below 7 % the peak did nothing, above 85 % it was too much. The knob still
+    /// reads 0-100 %: 0 % is now Q 0.89 (the old 7 %) and 100 % is Q 12.1 (the old 85 %). The
+    /// shared filter's own mapping is left alone, because the OTT's crossover relies on its
+    /// minimum Q.
+    static constexpr double kResonanceFloor = 0.07;
+    static constexpr double kResonanceCeiling = 0.85;
+
+    /// RES (0...1) as a position in the filter's full resonance range.
+    static double resonanceRange(float amount) {
+        return kResonanceFloor + (kResonanceCeiling - kResonanceFloor) * double(amount);
+    }
     /// The offset the post-downsample fold adds before folding and takes away after, which folds
     /// the two halves of the wave differently (the owner's Max experiment used 0.15).
     static constexpr double kFoldAsymmetry = 0.15;

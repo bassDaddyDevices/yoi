@@ -363,7 +363,6 @@
         setDim('glideMode', v.glideTime <= 0);
         setDim('subShape', v.subLevel <= 0);
         setDim('subOctave', v.subLevel <= 0);
-        setDim('subCrossover', v.subLevel <= 0);   // with no sub there's nothing to split
 
         const free = v.envTimeMode >= 0.5;
         document.getElementById('time-sync').hidden = free;

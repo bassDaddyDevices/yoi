@@ -154,9 +154,12 @@ double noteHertz(double note) {
 }
 
 /// Settings that make pitch easy to measure: saw only, no sub, a low clean cutoff, instant glide.
+/// X-OVER goes to its lowest, because the oscillator gives up everything below it even with no
+/// sub, and the fundamental is what the pitch is counted from.
 void setUpForPitch(Kernel& kernel, double note) {
     kernel.setParameter(oscShape, 0.0f);
     kernel.setParameter(subLevel, 0.0f);
+    kernel.setParameter(subCrossover, 50.0f);
     kernel.setParameter(resonance, 0.0f);
     kernel.setParameter(cutoff, float(noteHertz(note) * 1.5));
     kernel.setParameter(glideTime, 0.0f);
@@ -1151,8 +1154,26 @@ void testSubCrossover() {
     // ...and the sub keeps it.
     const double subChange = 20.0 * std::log10(level(split, 27.5) / level(playCrossover(100.0f, 700.0f), 27.5));
     CHECK(std::fabs(subChange) < 1.0, "the sub below the crossover should be untouched, changed %.2f dB", subChange);
-    // With the sub off there's nothing to split, so the oscillator keeps everything.
-    CHECK(playCrossover(0.0f, 130.0f) == playCrossover(0.0f, 600.0f), "with no sub, the crossover should change nothing");
+    // With the sub off the split stays: Sub Level 0 means no low end below X-OVER, not the
+    // oscillator's own low end coming back (YOI-001).
+    CHECK(level(playCrossover(0.0f, 130.0f), 55.0) < level(playCrossover(0.0f, 50.0f), 55.0) * 0.25,
+          "with no sub, the oscillator should still give up its low end below the crossover");
+    // Through the whole default patch (envelope, downsampler, clean-up), turning the sub the rest
+    // of the way down must never make YOI louder or bring the fundamental back. Before the fix,
+    // 10 % to 0 % raised the level by 5 dB and the fundamental by 30 dB.
+    auto playDefaults = [](float subPercent) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(subLevel, subPercent);
+        kernel->noteOn(33, 100);
+        return render(*kernel, frames(2.0));
+    };
+    const auto tenPercent = playDefaults(10.0f);
+    const auto noSub = playDefaults(0.0f);
+    CHECK(rms(noSub, from) <= rms(tenPercent, from) * 1.0001, "sub at 0 is louder than at 10 %%: %.1f dB against %.1f dB",
+          20.0 * std::log10(rms(noSub, from)), 20.0 * std::log10(rms(tenPercent, from)));
+    // 3 dB of room: the sub's 27.5 Hz leaks a little into a single-frequency reading, and the
+    // bug this guards against was a 30 dB jump.
+    CHECK(level(noSub, 55.0) <= level(tenPercent, 55.0) * 2.0 + 1e-12, "sub at 0 brought the oscillator's fundamental back");
     // The split is what stops the stacking: less low end piles up than with the oscillator open.
     CHECK(rms(split, from) < rms(open, from), "splitting at the crossover should leave less stacked low end");
 }
@@ -1281,6 +1302,7 @@ void testOttEvensOutTheLevel() {
     auto measure = [](float depth) {
         auto kernel = makeKernel(kSampleRate, true, true, true);
         kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(subCrossover, 50.0f);   // a full-range voice, as this was written against
         kernel->setParameter(envAmount, 6.0f);
         kernel->setParameter(envTimeMode, 1.0f);    // Free, so the drawing moves without a host
         kernel->setParameter(envFreeTime, 400.0f);
