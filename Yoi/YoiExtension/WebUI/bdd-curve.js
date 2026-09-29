@@ -24,6 +24,13 @@
         inset: 14,
         pointRadius: 5,
         hitRadius: 10,
+        lineWidth: 4,
+        glowBlur: 10,
+        gridAcross: 16,       // grid lines across (sixteenths) and up (eighths)...
+        gridUp: 8,
+        gridMajorEvery: 4,    // ...with every fourth one brighter
+        pointDot: true,       // a dot in the middle of each point
+        labelFont: '700 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace',
         colors: {
             line: '#f5e27a',
             glow: 'rgba(245, 226, 122, 0.45)',
@@ -164,7 +171,7 @@
             context.lineCap = 'round';
             if (glow) {
                 context.shadowColor = glow;
-                context.shadowBlur = 10;
+                context.shadowBlur = options.glowBlur;
             }
             context.beginPath();
             for (let i = first; i <= end; i++) {
@@ -184,19 +191,19 @@
             const inset = options.inset;
             context.clearRect(0, 0, width, height);
 
-            // Grid: sixteenths across, eighths up, with the quarters brighter.
+            // Grid: gridAcross lines across, gridUp up, every gridMajorEvery-th brighter.
             context.lineWidth = 1;
-            for (let i = 1; i < 16; i++) {
-                const [x] = toScreen(i / 16, 0);
-                context.strokeStyle = i % 4 === 0 ? colors.gridMajor : colors.gridMinor;
+            for (let i = 1; i < options.gridAcross; i++) {
+                const [x] = toScreen(i / options.gridAcross, 0);
+                context.strokeStyle = i % options.gridMajorEvery === 0 ? colors.gridMajor : colors.gridMinor;
                 context.beginPath();
                 context.moveTo(Math.round(x) + 0.5, inset);
                 context.lineTo(Math.round(x) + 0.5, height - inset);
                 context.stroke();
             }
-            for (let i = 1; i < 8; i++) {
-                const [, y] = toScreen(0, i / 8);
-                context.strokeStyle = i % 4 === 0 ? colors.gridMajor : colors.gridMinor;
+            for (let i = 1; i < options.gridUp; i++) {
+                const [, y] = toScreen(0, i / options.gridUp);
+                context.strokeStyle = i % options.gridMajorEvery === 0 ? colors.gridMajor : colors.gridMinor;
                 context.beginPath();
                 context.moveTo(inset, Math.round(y) + 0.5);
                 context.lineTo(width - inset, Math.round(y) + 0.5);
@@ -204,7 +211,7 @@
             }
 
             // The range labels, if the synth gave any.
-            context.font = '700 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+            context.font = options.labelFont;
             context.fillStyle = colors.label;
             context.textAlign = 'right';
             if (state.labels.top) {
@@ -217,13 +224,13 @@
             }
 
             // The curve, as the plug-in plays it.
-            strokeTable(0, 1, colors.line, 4, colors.glow);
+            strokeTable(0, 1, colors.line, options.lineWidth, colors.glow);
 
             // The segment an alt-drag would bend (or is bending).
             const bending = state.action && state.action.kind === 'bend' ? state.action.index : -1;
             const highlighted = bending >= 0 ? bending : (state.altHeld && state.pointerInside ? state.hoverSegment : -1);
             if (highlighted >= 0 && highlighted < state.points.length - 1) {
-                strokeTable(state.points[highlighted][0], state.points[highlighted + 1][0], colors.bend, 4, null);
+                strokeTable(state.points[highlighted][0], state.points[highlighted + 1][0], colors.bend, options.lineWidth, null);
             }
 
             // Playhead.
@@ -258,7 +265,7 @@
                 context.lineWidth = 2.5;
                 context.strokeStyle = colors.point;
                 context.stroke();
-                if (index !== active) {
+                if (index !== active && options.pointDot) {
                     context.beginPath();
                     context.arc(px, py, 1.5, 0, Math.PI * 2);
                     context.fillStyle = colors.point;
@@ -486,6 +493,46 @@
         };
     }
 
+    /**
+     * The redesign's look (YOI_DOCS decisions/redesign-macros): a finer line with a soft glow, a
+     * sparse quiet grid, hollow ring points. Colours come from bdd-modern.css's variables, so the
+     * drawing always matches the controls: pass the result as the editor's options.
+     */
+    function modernStyle(element = document.documentElement) {
+        const css = getComputedStyle(element);
+        const read = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+        const accent = read('--bdd-accent', '#f2a93b');
+        const ink = read('--bdd-ink', '#e6e9ed');
+        const alpha = (hex, a) => {
+            const h = hex.replace('#', '');
+            const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+            const n = parseInt(full.slice(0, 6), 16);
+            return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+        };
+        return {
+            lineWidth: 2.5,
+            glowBlur: 8,
+            gridAcross: 8,
+            gridUp: 4,
+            gridMajorEvery: 8,
+            pointDot: false,
+            labelFont: `600 10px ${read('--bdd-font', 'sans-serif')}`,
+            colors: {
+                line: accent,
+                glow: alpha(accent, 0.35),
+                bend: ink,
+                point: accent,
+                pointFill: read('--bdd-well', '#101215'),
+                gridMajor: '#1c2025',
+                gridMinor: '#1c2025',
+                playhead: alpha(ink, 0.35),
+                playheadDot: ink,
+                label: read('--bdd-faint', '#5d656f'),
+            },
+        };
+    }
+
     window.bdd = window.bdd || {};
     window.bdd.curveEditor = curveEditor;
+    window.bdd.curveStyles = { modern: modernStyle };
 })();

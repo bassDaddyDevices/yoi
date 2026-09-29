@@ -3,7 +3,12 @@
 // parameter through the browser stand-in. Not loaded by the plug-in's panel.
 (function () {
     'use strict';
-    const { dial, fader, choice, level } = bdd.controls;
+    const { dial, fader, choice, level, menuButton } = bdd.controls;
+    const editor = bdd.curveEditor(document.getElementById('curve'), Object.assign(bdd.curveStyles.modern(), {
+        onEdit: (points) => bdd.setCurve(points),
+        onHint: (text) => { document.getElementById('hint').textContent = text; },
+    }));
+    window.addEventListener('resize', () => editor.resize());
     const byId = new Map();
     const controls = [];
     let built = false;
@@ -28,6 +33,13 @@
             p[parameter.identifier] = parameter;
             byId.set(parameter.id, parameter.identifier);
         }
+        document.getElementById('motion').append(
+            add(choice(p.envTimeMode, { labels: ['Sync', 'Free'] })),
+            add(menuButton(p.envSyncLength, { columns: 4 })),
+            add(menuButton(p.envDirection))
+        );
+        document.getElementById('amount').append(add(fader(p.envAmount, { label: 'Amount', inline: true, travel: 200 })));
+        editor.resize();
         const dials = document.getElementById('dials');
         for (const [id, label] of [['macroVoice', 'Voice'], ['macroPower', 'Power'], ['macroControl', 'Control'], ['macroWidth', 'Width']]) {
             dials.appendChild(card(add(dial(p[id], { label }))));
@@ -39,7 +51,7 @@
         cutoff.append(add(dial(p.cutoff, { label: 'Cutoff' })), add(choice(p.filterMode, { labels: ['LP', 'BP'], vertical: true })));
         dials.appendChild(card(cutoff));
 
-        document.getElementById('inline').append(add(fader(p.envAmount, { label: 'Amount', inline: true, travel: 200 })));
+        document.getElementById('inline').append(add(fader(p.resonance, { label: 'Resonance', inline: true, travel: 200 })));
         document.getElementById('choices').append(
             add(choice(p.envTimeMode, { labels: ['Sync', 'Free'] })),
             add(choice(p.dsMode, { labels: ['S&H', 'Downsample'], values: [1, 2] }))
@@ -68,6 +80,15 @@
     bdd.onReceive((incoming) => {
         if (incoming.descriptor && !built) {
             build(incoming.descriptor);
+        }
+        if (incoming.curve) {
+            editor.setPoints(incoming.curve.points);
+            if (incoming.curve.table) {
+                editor.setTable(incoming.curve.table);
+            }
+        }
+        if (incoming.display) {
+            editor.setPlayhead(incoming.display.position, incoming.display.value);
         }
         if (incoming.params) {
             for (const [id, value] of Object.entries(incoming.params)) {

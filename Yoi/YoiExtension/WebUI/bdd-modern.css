@@ -81,3 +81,23 @@
 .bdd-level-meter { display: flex; gap: 3px; }
 .bdd-level-bar { position: relative; width: 4px; border-radius: 2px; background: #121418; overflow: hidden; }
 .bdd-level-bar div { position: absolute; left: 0; bottom: 0; width: 4px; border-radius: 2px; background: linear-gradient(var(--bdd-accent), color-mix(in srgb, var(--bdd-accent) 35%, #15181c)); }
+
+/* Menu button, and the menu it opens (openMenu builds .menu / .menu-item). Scoped to the modern
+   stage, so the pixel panel's menu keeps its own look. */
+.bdd-menu-button {
+    height: 30px; padding: 0 10px; border: 1px solid #262a31; border-radius: 8px; cursor: pointer;
+    background: var(--bdd-card); color: var(--bdd-ink); font: 600 12px/1 var(--bdd-font);
+}
+.bdd-menu-button:hover { border-color: var(--bdd-line-strong); background: var(--bdd-raised); }
+.bdd-menu-button:focus-visible { outline: 2px solid var(--bdd-accent); outline-offset: 2px; }
+.bdd-modern .menu {
+    position: absolute; z-index: 20; display: grid; gap: 2px; padding: 4px;
+    background: var(--bdd-sheet); border: 1px solid var(--bdd-line-strong); border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.bdd-modern .menu-item {
+    height: 28px; padding: 0 12px; border: none; border-radius: 6px; cursor: pointer; text-align: left;
+    background: transparent; color: var(--bdd-ink-soft); font: 600 12px/1 var(--bdd-font); white-space: nowrap;
+}
+.bdd-modern .menu-item:hover { background: var(--bdd-raised); color: var(--bdd-ink); }
+.bdd-modern .menu-item.selected { color: var(--bdd-accent); }

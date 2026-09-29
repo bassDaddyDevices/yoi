@@ -897,6 +897,49 @@
         return control;
     }
 
+    /**
+     * A button showing a list parameter's value that opens a menu of its options, as the rate and
+     * direction over the drawing do.
+     *   options: { label (for screen readers), columns, format(value), onChange(value) }
+     */
+    function menuButton(parameter, options = {}) {
+        const element = document.createElement('button');
+        element.type = 'button';
+        element.className = 'bdd-menu-button';
+        element.setAttribute('aria-label', options.label || parameter.name);
+        element.setAttribute('aria-haspopup', 'listbox');
+        const items = parameter.options || [];
+        const text = options.format || ((value) => items[Math.round(value) - parameter.min] ?? format(parameter, value));
+        const control = {
+            element,
+            parameter,
+            value: parameter.default ?? parameter.min,
+            set(value) {
+                show(value);
+            },
+        };
+        function show(value) {
+            control.value = value;
+            element.textContent = text(value);
+        }
+        control.gesture = makeGesture(parameter, (value) => {
+            show(value);
+            if (options.onChange) {
+                options.onChange(value);
+            }
+        });
+        element.addEventListener('click', () => {
+            openMenu(element, {
+                items,
+                selected: Math.round(control.value) - parameter.min,
+                columns: options.columns || 1,
+                onPick: (index) => control.gesture.once(index + parameter.min),
+            });
+        });
+        show(control.value);
+        return control;
+    }
+
     window.bdd = window.bdd || {};
     window.bdd.controls = {
         toPosition,
@@ -913,5 +956,6 @@
         fader,
         choice,
         level,
+        menuButton,
     };
 })();
