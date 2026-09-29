@@ -181,7 +181,8 @@ void testDefaultsMatchParameterTree() {
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
         { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 45.0f },
         { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 5.0f },
-        { boostAmount, 0.0f }, { ottDepth, 0.0f }, { widthAmount, 0.0f },
+        { boostAmount, 0.0f }, { ottDepth, 0.0f }, { widthAmount, 0.0f }, { ottTime, 50.0f },
+        { ottUpward, 100.0f },
     };
     for (const auto& item : expected) {
         const float actual = kernel->getParameter(item.address);
@@ -218,7 +219,8 @@ void testParametersRoundTrip() {
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
         { foldAmount, 35.0f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
-        { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f },
+        { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f }, { ottTime, 20.0f },
+        { ottUpward, 150.0f },
     };
     for (const auto& item : items) {
         kernel->setParameter(item.address, item.value);
@@ -1329,6 +1331,62 @@ void testOttEvensOutTheLevel() {
     CHECK(squashed.highest <= 1.0f, "OTT's output should stay inside full scale: peak %f", squashed.highest);
 }
 
+void testOttTimeAndUpward() {
+    // OTT TIME and OTT UP. At their defaults (50 %, 100 %) the compressor is exactly what it was;
+    // TIME sets how closely it rides each sweep, UP how far it lifts the quiet top end.
+    struct Result { double swing, brightness; float highest; std::vector<float> output; };
+    auto measure = [](float time, float upward, bool setThem) {
+        auto kernel = makeKernel(kSampleRate, true, true, true);
+        kernel->setParameter(subLevel, 0.0f);
+        kernel->setParameter(subCrossover, 50.0f);
+        kernel->setParameter(envAmount, 6.0f);
+        kernel->setParameter(envTimeMode, 1.0f);    // Free, so the drawing moves without a host
+        kernel->setParameter(envFreeTime, 400.0f);
+        kernel->setParameter(ottDepth, 100.0f);
+        if (setThem) {
+            kernel->setParameter(ottTime, time);
+            kernel->setParameter(ottUpward, upward);
+        }
+        kernel->noteOn(40, 100);
+        auto output = render(*kernel, frames(2.0));
+        const size_t from = size_t(frames(0.3));
+        double quietest = 1e9, loudest = -1e9;
+        for (size_t start = from; start + size_t(frames(0.05)) < output.size(); start += size_t(frames(0.05))) {
+            const double level = 20.0 * std::log10(rms(output, start, start + size_t(frames(0.05))) + 1e-9);
+            quietest = std::min(quietest, level);
+            loudest = std::max(loudest, level);
+        }
+        const double bright = 20.0 * std::log10(brightness(output, from));
+        const float highest = peak(output);
+        return Result{ loudest - quietest, bright, highest, std::move(output) };
+    };
+    const auto untouched = measure(0.0f, 0.0f, false);
+    const auto defaults = measure(50.0f, 100.0f, true);
+    CHECK(defaults.output == untouched.output, "OTT TIME 50 %% and OTT UP 100 %% should be exactly the OTT as it was");
+
+    const auto fast = measure(0.0f, 100.0f, true);
+    const auto slow = measure(100.0f, 100.0f, true);
+    CHECK(fast.swing < slow.swing - 1.0, "a shorter OTT TIME should ride the sweeps harder: swing %.1f dB against %.1f dB",
+          fast.swing, slow.swing);
+
+    const auto noLift = measure(50.0f, 0.0f, true);
+    const auto moreLift = measure(50.0f, 200.0f, true);
+    CHECK(moreLift.brightness > defaults.brightness + 1.0, "OTT UP 200 %% should bring the top end further forward: %.1f dB against %.1f dB",
+          moreLift.brightness, defaults.brightness);
+    CHECK(noLift.brightness < defaults.brightness - 1.0, "OTT UP 0 %% should leave the top end where it was: %.1f dB against %.1f dB",
+          noLift.brightness, defaults.brightness);
+
+    for (const auto* result : { &fast, &slow, &noLift, &moreLift }) {
+        CHECK(result->highest <= 1.0f, "OTT output should stay inside full scale: peak %f", result->highest);
+    }
+
+    auto kernel = makeKernel();
+    kernel->setParameter(ottUpward, 500.0f);
+    CHECK(kernel->getParameter(ottUpward) == 200.0f, "OTT UP should stop at 200 %%, got %f", kernel->getParameter(ottUpward));
+    kernel->setParameter(ottTime, -10.0f);
+    CHECK(kernel->getParameter(ottTime) == 0.0f, "OTT TIME should start at 0 %%, got %f", kernel->getParameter(ottTime));
+}
+
 void testWidthIsMonoCompatible() {
     auto play = [](float width) {
         auto kernel = makeKernel();
@@ -1422,6 +1480,7 @@ int main() {
     testPostDownsampleFold();
     testHarmonicBooster();
     testOttEvensOutTheLevel();
+    testOttTimeAndUpward();
     testWidthIsMonoCompatible();
     testFinishExtremesStayBounded();
     testCleanupFilter();

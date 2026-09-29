@@ -19,6 +19,8 @@
         if (value >= 99.5) return high;
         return Math.round(value) + '%';
     };
+    // OTT TIME reads as the compressor's release: 50 % is 100 ms, each 25 % halves or doubles it.
+    const ottRelease = (value) => Math.round(100 * Math.pow(2, (value - 50) / 25)) + ' ms';
 
     const BLUE = 'var(--blue)';
     const PINK = 'var(--pink)';
@@ -97,7 +99,11 @@
                     ],
                 },
                 {
-                    knobs: [null, { id: 'outputLevel', label: 'LEVEL', color: CREAM }, null],
+                    knobs: [
+                        { id: 'ottTime', label: 'OTT TIME', color: PURPLE, format: ottRelease },
+                        { id: 'ottUpward', label: 'OTT UP', color: PURPLE },
+                        { id: 'outputLevel', label: 'LEVEL', color: CREAM },
+                    ],
                 },
             ],
         },
@@ -363,6 +369,8 @@
         setDim('glideMode', v.glideTime <= 0);
         setDim('subShape', v.subLevel <= 0);
         setDim('subOctave', v.subLevel <= 0);
+        setDim('ottTime', v.ottDepth <= 0);
+        setDim('ottUpward', v.ottDepth <= 0);
 
         const free = v.envTimeMode >= 0.5;
         document.getElementById('time-sync').hidden = free;

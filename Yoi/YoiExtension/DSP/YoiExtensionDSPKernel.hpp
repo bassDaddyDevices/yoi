@@ -97,13 +97,14 @@ public:
                                 &mOutputSmoother, &mEnvAmountSmoother, &mAccelStartSmoother,
                                 &mAccelEndSmoother, &mAccelCurveSmoother, &mFoldAmountSmoother,
                                 &mCleanupMultipleSmoother, &mSubCrossoverSmoother, &mBoostSmoother,
-                                &mOttDepthSmoother, &mWidthSmoother }) {
+                                &mOttDepthSmoother, &mOttUpwardSmoother, &mWidthSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
         mBoostLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
         mFoldDC.setSampleRate(inSampleRate);
         mOtt.setSampleRate(inSampleRate);
+        mAppliedOttTime = -1.0f;   // applied again at the next block, at the new rate
         mOttWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mDimension.setSampleRate(inSampleRate);
         mFoldPositionBlend.setDuration(kModeCrossfadeSeconds, inSampleRate);
@@ -250,6 +251,12 @@ public:
             case YoiExtensionParameterAddress::widthAmount:
                 mWidthAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 break;
+            case YoiExtensionParameterAddress::ottTime:
+                mOttTime = std::clamp(value, 0.0f, 100.0f);
+                break;
+            case YoiExtensionParameterAddress::ottUpward:
+                mOttUpward = std::clamp(value * 0.01f, 0.0f, 2.0f);
+                break;
             case YoiExtensionParameterAddress::cleanupMode:
                 mCleanupMode = std::clamp(int(std::lround(value)), 0, 1);
                 break;
@@ -295,6 +302,8 @@ public:
             case YoiExtensionParameterAddress::boostAmount: return mBoostAmount * 100.0f;
             case YoiExtensionParameterAddress::ottDepth: return mOttDepth * 100.0f;
             case YoiExtensionParameterAddress::widthAmount: return mWidthAmount * 100.0f;
+            case YoiExtensionParameterAddress::ottTime: return mOttTime;
+            case YoiExtensionParameterAddress::ottUpward: return mOttUpward * 100.0f;
             case YoiExtensionParameterAddress::cleanupMode: return AUValue(mCleanupMode);
             case YoiExtensionParameterAddress::cleanupMultiple: return mCleanupMultiple;
             default: return 0.f;
@@ -517,6 +526,7 @@ public:
      */
     void process(std::span<float *> outputBuffers, int64_t bufferStartTime, uint32_t frameCount) {
         applyAmpEnvelopeSettings();
+        applyOttTime();
         adoptPublishedCurve();
 
         // Envelope timing for this block.
@@ -681,11 +691,12 @@ public:
             // OTT-style compression on everything but the sub. Its crossover is in the path only
             // while it's in use, faded in and out so turning it on or off never clicks.
             const double ottDepth = double(mOttDepthSmoother.next(mOttDepth));
+            const double ottUpward = double(mOttUpwardSmoother.next(mOttUpward));
             const double ottWeight = double(mOttWeight.next(mOttDepth > 0.0f ? 1.0f : 0.0f));
             double compressed = top;
             if (ottWeight > 0.0) {
                 const double makeup = std::exp2(ottDepth * kOttMakeupDecibels / 6.020599913);
-                compressed = top + ottWeight * (mOtt.process(top, ottDepth) * makeup - top);
+                compressed = top + ottWeight * (mOtt.process(top, ottDepth, ottUpward) * makeup - top);
             }
 
             // Width, then the sub back in, in the middle.
@@ -976,6 +987,22 @@ private:
         }
     }
 
+    /// OTT TIME as a multiple of the compressor's own times (5 ms attack, 100 ms release): 50 %
+    /// is exactly those, and each 25 % either side halves or doubles both, so 0 % is 1.25 ms /
+    /// 25 ms (it rides each sweep) and 100 % is 20 ms / 400 ms (it barely moves).
+    static double ottTimeScale(float percent) {
+        return std::exp2((double(percent) - 50.0) / 25.0);
+    }
+
+    /// Recalculates the OTT's attack and release when OTT TIME has changed. Runs on the render
+    /// thread, once per block. Times change how the detector moves, not the gain, so no smoothing.
+    void applyOttTime() {
+        if (mOttTime != mAppliedOttTime) {
+            mAppliedOttTime = mOttTime;
+            mOtt.setTimeScale(ottTimeScale(mOttTime), mSampleRate);
+        }
+    }
+
     /// Cleans up, renders and publishes a drawing. Runs on the editing thread.
     void publishEnvelopeCurve(const bdd::CurvePoint* points, int count) {
         mPublishedCount = bdd::sanitizeCurve(points, count, mPublishedPoints.data());
@@ -1033,6 +1060,7 @@ private:
         mSubCrossoverSmoother.snap(std::log2(mSubCrossoverHertz));
         mBoostSmoother.snap(mBoostAmount);
         mOttDepthSmoother.snap(mOttDepth);
+        mOttUpwardSmoother.snap(mOttUpward);
         mOttWeight.snap(mOttDepth > 0.0f ? 1.0f : 0.0f);
         mWidthSmoother.snap(mWidthAmount);
         mCleanupWeight.snap(mCleanupMode != 0 ? 1.0f : 0.0f);
@@ -1087,6 +1115,9 @@ private:
     float mBoostAmount = 0.0f;
     float mOttDepth = 0.0f;
     float mWidthAmount = 0.0f;
+    float mOttTime = 50.0f;
+    float mOttUpward = 1.0f;
+    float mAppliedOttTime = -1.0f;
 
     float mBendPosition = 0.0f;
 
@@ -1117,6 +1148,7 @@ private:
     bdd::Smoother mSubCrossoverSmoother;
     bdd::Smoother mBoostSmoother;
     bdd::Smoother mOttDepthSmoother;
+    bdd::Smoother mOttUpwardSmoother;
     bdd::LinearRamp mOttWeight;
     bdd::Smoother mWidthSmoother;
     float mAppliedCrossoverOctaves = -1.0f;

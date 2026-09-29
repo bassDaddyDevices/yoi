@@ -53,6 +53,8 @@ struct YoiExtensionMainView: View {
                     ParameterSlider(param: parameterTree.finish.boostAmount)
                     ParameterSlider(param: parameterTree.finish.ottDepth)
                     ParameterSlider(param: parameterTree.finish.widthAmount)
+                    ParameterSlider(param: parameterTree.finish.ottTime)
+                    ParameterSlider(param: parameterTree.finish.ottUpward)
                 }
                 section("Oscillators") {
                     ParameterSlider(param: parameterTree.oscillators.oscShape)

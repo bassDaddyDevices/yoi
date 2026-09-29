@@ -328,6 +328,22 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueRange: 0.0...100.0,
             defaultValue: 0.0
         )
+        ParameterSpec(
+            address: .ottTime,
+            identifier: "ottTime",
+            name: "OTT Time",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 50.0
+        )
+        ParameterSpec(
+            address: .ottUpward,
+            identifier: "ottUpward",
+            name: "OTT Upward",
+            units: .percent,
+            valueRange: 0.0...200.0,
+            defaultValue: 100.0
+        )
     }
 }
 

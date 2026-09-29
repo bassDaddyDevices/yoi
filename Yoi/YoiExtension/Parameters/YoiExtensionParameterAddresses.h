@@ -64,7 +64,9 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
 
     boostAmount = 80,
     ottDepth = 81,
-    widthAmount = 82
+    widthAmount = 82,
+    ottTime = 83,
+    ottUpward = 84
 };
 
 #else
@@ -120,7 +122,9 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
 
     boostAmount = 80,
     ottDepth = 81,
-    widthAmount = 82
+    widthAmount = 82,
+    ottTime = 83,
+    ottUpward = 84
 };
 
 #endif
