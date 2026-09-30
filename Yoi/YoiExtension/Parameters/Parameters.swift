@@ -281,7 +281,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             identifier: "foldAmount",
             name: "Fold",
             units: .percent,
-            valueRange: 0.0...100.0,
+            valueRange: 0.0...5.0,   // past 5 % the fold only gets worse (redesign-macros)
             defaultValue: 0.0
         )
         ParameterSpec(

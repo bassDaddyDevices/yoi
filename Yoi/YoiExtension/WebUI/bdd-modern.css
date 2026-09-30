@@ -119,3 +119,11 @@
 .bdd-pad-axis { position: absolute; left: 12px; font: 600 10px/1 var(--bdd-font); letter-spacing: 0.06em; color: var(--bdd-faint); text-transform: uppercase; pointer-events: none; }
 .bdd-pad-axis.bottom { bottom: 10px; }
 .bdd-pad-axis.top { top: 10px; }
+
+/* Value button: a menu button's look for a continuous value you drag (free time). */
+.bdd-value-button { display: inline-flex; align-items: center; box-sizing: border-box; cursor: ns-resize; touch-action: none; user-select: none; font-variant-numeric: tabular-nums; }
+.bdd-value-button.held { border-color: var(--bdd-line-strong); background: var(--bdd-raised); }
+
+/* Tabs: segmented buttons that fill their row (the details sheet's pages). */
+.bdd-tabs { border-radius: 9px; }
+.bdd-tabs button { height: 28px; border-radius: 7px; font-size: 12px; }

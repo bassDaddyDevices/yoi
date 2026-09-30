@@ -206,6 +206,9 @@ void testRangesClamp() {
     CHECK(kernel->getParameter(subCrossover) == 50.0f, "crossover should start at 50 Hz, got %f", kernel->getParameter(subCrossover));
     kernel->setParameter(subCrossover, 5000.0f);
     CHECK(kernel->getParameter(subCrossover) == 700.0f, "crossover should stop at 700 Hz, got %f", kernel->getParameter(subCrossover));
+    // The fold's whole throw is 0-5 %: past that it only gets worse.
+    kernel->setParameter(foldAmount, 60.0f);
+    CHECK(std::fabs(kernel->getParameter(foldAmount) - 5.0f) < 1e-4f, "fold should stop at 5 %%, got %f", kernel->getParameter(foldAmount));
 }
 
 void testParametersRoundTrip() {
@@ -219,7 +222,7 @@ void testParametersRoundTrip() {
         { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
-        { foldAmount, 35.0f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
+        { foldAmount, 3.5f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
         { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f }, { ottTime, 20.0f },
         { ottUpward, 150.0f }, { filterMirror, 55.0f }, { filterDrive, 30.0f }, { dsLock, 1.0f },
     };
@@ -1039,17 +1042,19 @@ std::vector<float> playFold(float amount, float position, float cutoffHertz, int
 
 void testFoldInTheVoice() {
     CHECK(playFold(0.0f, 0.0f, 800.0f) == playFold(0.0f, 1.0f, 800.0f), "at 0 %% the fold should be an exact bypass in either position");
-    // After a 150 Hz cutoff the note is close to a sine, so harmonics the fold adds stand out.
-    CHECK(brightness(playFold(60.0f, 1.0f, 150.0f), 4800) > brightness(playFold(0.0f, 1.0f, 150.0f), 4800) * 1.5,
-          "folding should add harmonics");
-    // After a low cutoff, folding pre-downsample keeps its new harmonics; pre-filter loses them.
-    CHECK(brightness(playFold(60.0f, 1.0f, 300.0f), 4800) > brightness(playFold(60.0f, 0.0f, 300.0f), 4800) * 1.5,
-          "pre-downsample folding should be brighter than pre-filter after a low cutoff");
+    // The fold's throw is 0-5 % now, where it's subtle: at 5 % it leaves brightness within 0.1 %
+    // and its uneven offset adds the 2nd harmonic (testPostDownsampleFold). What still shows:
+    // after a low cutoff, folding pre-downsample keeps more top than pre-filter (x1.12 measured
+    // at 5 %, 2026-09-29; it was x1.5 at the old 60 %).
+    const double preDownsample = brightness(playFold(5.0f, 1.0f, 300.0f), 4800);
+    const double preFilter = brightness(playFold(5.0f, 0.0f, 300.0f), 4800);
+    CHECK(preDownsample > preFilter * 1.05, "pre-downsample folding should be brighter than pre-filter after a low cutoff: x%.3f",
+          preDownsample / preFilter);
 }
 
 void testFoldPositionSwitchIsSmooth() {
     auto kernel = makeKernel();
-    kernel->setParameter(foldAmount, 80.0f);
+    kernel->setParameter(foldAmount, 5.0f);
     kernel->setParameter(cutoff, 300.0f);
     kernel->setParameter(resonance, 0.0f);
     kernel->noteOn(40, 100);
@@ -1198,9 +1203,9 @@ void testFoldKeepsTheLevel() {
     // voice into the fold after the filter made it up to 9 dB louder.
     for (float mode : { 0.0f, 1.0f }) {
         const double unfolded = foldLevel(0.0f, 1.0f, mode);
-        for (float amount : { 25.0f, 50.0f, 100.0f }) {
+        for (float amount : { 1.25f, 2.5f, 5.0f }) {
             const double change = 20.0 * std::log10(foldLevel(amount, 1.0f, mode) / unfolded);
-            CHECK(std::fabs(change) < 1.5, "%s, pre-downsample fold at %.0f%% changes the level by %.1f dB",
+            CHECK(std::fabs(change) < 1.5, "%s, pre-downsample fold at %.2f%% changes the level by %.1f dB",
                   mode > 0.5f ? "band-pass" : "low-pass", amount, change);
         }
     }
@@ -1264,9 +1269,11 @@ void testPostDownsampleFold() {
         return energyAt(output, from, output.size(), 2.0 * f0) / energyAt(output, from, output.size(), f0);
     };
     // A symmetric fold of a near-sine makes odd harmonics only; the uneven one adds even ones.
-    const auto uneven = playFoldAt(60.0f, 2.0f);
-    const auto even = playFoldAt(60.0f, 1.0f);
-    CHECK(evenShare(uneven) > evenShare(even) * 5.0, "the post-downsample fold should add even harmonics: %.4f against %.4f",
+    // At the full 5 % throw that's about 10 % more 2nd harmonic (x1.09 measured 2026-09-29; x5
+    // was the bar at the old 60 %).
+    const auto uneven = playFoldAt(5.0f, 2.0f);
+    const auto even = playFoldAt(5.0f, 1.0f);
+    CHECK(evenShare(uneven) > evenShare(even) * 1.05, "the post-downsample fold should add even harmonics: %.4f against %.4f",
           evenShare(uneven), evenShare(even));
     double sum = 0.0;
     for (size_t index = from; index < uneven.size(); ++index) {

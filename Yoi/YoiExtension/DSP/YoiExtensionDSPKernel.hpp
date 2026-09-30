@@ -241,7 +241,8 @@ public:
                 mDownsampleAmount = std::clamp(value, 0.0f, 100.0f);
                 break;
             case YoiExtensionParameterAddress::foldAmount:
-                mFoldAmount = std::clamp(value * 0.01f, 0.0f, 1.0f);
+                // 0-5 %: the fold only helps up to 5 % (redesign-macros), so that's the whole throw.
+                mFoldAmount = std::clamp(value * 0.01f, 0.0f, kFoldMaximum);
                 break;
             case YoiExtensionParameterAddress::foldPosition:
                 mFoldPosition = std::clamp(int(std::lround(value)), 0, 2);
@@ -1287,6 +1288,7 @@ private:
     int mDownsampleMode = downsampleSampleHold;
     float mSampleHoldRate = 1400.0f;
     float mDownsampleAmount = 70.0f;   // where THROAT's default (the full throat) puts it
+    static constexpr float kFoldMaximum = 0.05f;
     float mFoldAmount = 0.0f;
     int mFoldPosition = foldPostDownsample;
     int mActiveFoldPosition = foldPostDownsample;

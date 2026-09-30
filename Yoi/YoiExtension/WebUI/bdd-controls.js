@@ -609,11 +609,13 @@
     }
 
     /**
-     * A screen-style pop-up list under `anchor`, inside the page's stage so it scales with it.
+     * A pop-up list under `anchor`, inside the page's stage so it scales with it. Inside the
+     * modern look (a `.bdd-modern` ancestor) its items are plain text; elsewhere pixel text.
      *   { items: [text], selected, columns, onPick(index) }
      */
     function openMenu(anchor, { items, selected = -1, columns = 1, onPick }) {
         closeMenu();
+        const modern = Boolean(anchor.closest('.bdd-modern'));
         const stage = document.getElementById('stage') || document.body;
         const scale = stage.getBoundingClientRect().width / (stage.offsetWidth || 1) || 1;
         const stageBox = stage.getBoundingClientRect();
@@ -633,7 +635,11 @@
             if (index === selected) {
                 option.classList.add('selected');
             }
-            option.appendChild(bdd.pixel.text(item, 2));
+            if (modern) {
+                option.textContent = item;
+            } else {
+                option.appendChild(bdd.pixel.text(item, 2));
+            }
             option.addEventListener('click', (event) => {
                 event.stopPropagation();
                 closeMenu();
@@ -941,6 +947,89 @@
     }
 
     /**
+     * A button-shaped readout for a continuous value, dragged up and down like a dial (the
+     * drawing's free time, where a menu can't list the values). Wheel, arrow keys and
+     * double-click-to-reset work as on the dial.
+     *   options: { label, travel (px for the full range, default 300), format(value), onChange(value) }
+     */
+    function valueButton(parameter, options = {}) {
+        const element = document.createElement('div');
+        element.className = 'bdd-menu-button bdd-value-button';
+        makeSlider(element, parameter, options.label);
+        const text = options.format || ((value) => format(parameter, value));
+        const control = {
+            element,
+            parameter,
+            value: parameter.default ?? parameter.min,
+            set(value) {
+                if (!control.gesture.active) {
+                    show(value);
+                }
+            },
+        };
+        function show(value) {
+            control.value = value;
+            element.textContent = text(value);
+            describe(element, parameter, value);
+        }
+        control.gesture = makeGesture(parameter, (value) => {
+            show(value);
+            if (options.onChange) {
+                options.onChange(value);
+            }
+        });
+        attachDragging(element, parameter, control, { pixelsForFullRange: options.travel || 300 });
+        show(control.value);
+        return control;
+    }
+
+    /**
+     * Tabs in the modern look, for pages of a panel (not bound to a parameter): segmented buttons
+     * that stretch to fill their row.
+     *   options: { label, selected, onSelect(index) }
+     * Returns { element, select(index) }.
+     */
+    function tabBar(names, options = {}) {
+        const element = document.createElement('div');
+        element.className = 'bdd-choice stretch bdd-tabs';
+        element.setAttribute('role', 'tablist');
+        if (options.label) {
+            element.setAttribute('aria-label', options.label);
+        }
+        const buttons = names.map((name, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = name;
+            button.setAttribute('role', 'tab');
+            button.addEventListener('click', () => select(index, true));
+            element.appendChild(button);
+            return button;
+        });
+        function select(index, fromUser) {
+            buttons.forEach((button, i) => {
+                button.classList.toggle('selected', i === index);
+                button.setAttribute('aria-selected', String(i === index));
+                button.tabIndex = i === index ? 0 : -1;
+            });
+            if (fromUser && options.onSelect) {
+                options.onSelect(index);
+            }
+        }
+        element.addEventListener('keydown', (event) => {
+            const current = buttons.findIndex((button) => button.classList.contains('selected'));
+            const move = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+            if (move) {
+                event.preventDefault();
+                const next = (current + move + buttons.length) % buttons.length;
+                select(next, true);
+                buttons[next].focus();
+            }
+        });
+        select(options.selected || 0, false);
+        return { element, select: (index) => select(index, false) };
+    }
+
+    /**
      * An XY pad for two parameters (the CHARACTER pad): X across, Y up. A drag sets both as one
      * move, a gesture on each, so hosts record two lanes; a click jumps the dot there. Arrow keys
      * nudge (shift for bigger steps), the wheel moves Y (X with shift), double-click resets both.
@@ -1086,6 +1175,8 @@
         choice,
         level,
         menuButton,
+        valueButton,
+        tabBar,
         pad,
     };
 })();

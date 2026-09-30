@@ -1,4 +1,4 @@
-// yoi-panel.js
+// yoi-panel-pixel.js: the 8-bit panel, kept until the new one (yoi-panel.js) is checked in Live.
 // YOI's panel: which controls go where, what they're called and what colour they are. The
 // controls themselves (bdd-controls.js), the curve editor (bdd-curve.js), the pixel font
 // (bdd-pixel.js) and the bridge (bdd-bridge.js) are shared with the other mini synths.
