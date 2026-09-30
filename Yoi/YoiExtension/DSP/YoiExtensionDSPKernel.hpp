@@ -115,6 +115,8 @@ public:
         mDownsampleWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mBendSmoother.setTimeConstant(kBendSmoothingSeconds, inSampleRate);
         snapSmoothers();
+        // Seeded here so an editor has a filter graph to draw before the first block renders.
+        storeFilterDisplayFromSmoothers(1.0);
 
         mHeldNotes.clear();
         mGlide.jump(60.0);
@@ -522,6 +524,33 @@ public:
         return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayValueBits)));
     }
 
+    /// The filter's cutoff in hertz as the last rendered block set it, drawing and all. An editor's
+    /// filter graph draws this rather than re-deriving the cutoff relation.
+    float filterDisplayCutoffHertz() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayCutoffBits)));
+    }
+
+    /// The filter's Q as the last rendered block set it, after the RES remap (ADJUST-001).
+    float filterDisplayQ() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayFilterQBits)));
+    }
+
+    /// The cutoff at the top of the drawing (the CUTOFF setting) in hertz, for a drawing's labels.
+    float filterDisplayTopHertz() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayCutoffTopBits)));
+    }
+
+    /// The cutoff at the bottom of the drawing, Amount octaves below the top, in hertz.
+    float filterDisplayBottomHertz() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayCutoffBottomBits)));
+    }
+
+    /// OTT's release in milliseconds at a given OTT TIME percent, for an editor's readout. Attack
+    /// moves with it; `MultibandCompressor` holds both times.
+    static float ottReleaseMilliseconds(float percent) {
+        return float(bdd::MultibandCompressor::kReleaseSeconds * 1000.0 * ottTimeScale(percent));
+    }
+
 #if YOI_AUDIO_UNIT
     // MARK: - Musical Context
 
@@ -601,6 +630,9 @@ public:
             } else {
                 mEnvelopeClock.advance(double(frameCount) * cyclesPerSample);
             }
+            // The graph still follows CUTOFF, RES and AMOUNT while nothing sounds. Nothing is
+            // modulating, so it sits at the top of the drawing, where the envelope leaves it alone.
+            storeFilterDisplayFromSmoothers(1.0);
             for (auto* buffer : outputBuffers) {
                 std::fill_n(buffer, frameCount, 0.f);
             }
@@ -693,7 +725,7 @@ public:
             const double mix = kOscillatorHeadroom * oscillator;
 
             // The top of the drawing is the CUTOFF setting; the bottom is Amount octaves below it.
-            const double modulatedOctaves = double(cutoffOctaves) - double(envAmount) * (1.0 - double(drawing));
+            const double modulatedOctaves = modulatedCutoffOctaves(double(cutoffOctaves), double(envAmount), double(drawing));
             const double filterQ = bdd::StateVariableFilter::qForResonance(resonanceRange(resonanceAmount));
             mFilter.setCoefficients(std::exp2(modulatedOctaves), filterQ, mSampleRate);
             // LAB: DRIVE saturates the filter's resonance loop (its band-pass state), which
@@ -802,6 +834,7 @@ public:
 
         bdd::atomics::storeRelaxed(mDisplayPositionBits, std::bit_cast<uint32_t>(float(drawingPosition)));
         bdd::atomics::storeRelaxed(mDisplayValueBits, std::bit_cast<uint32_t>(drawing));
+        storeFilterDisplayFromSmoothers(double(drawing));
     }
 
 #if YOI_AUDIO_UNIT
@@ -975,6 +1008,34 @@ private:
     /// RES (0...1) as a position in the filter's full resonance range.
     static double resonanceRange(float amount) {
         return kResonanceFloor + (kResonanceCeiling - kResonanceFloor) * double(amount);
+    }
+
+    /// The top of the drawing is the CUTOFF setting; the bottom is `envAmount` octaves below it.
+    /// The render loop and the filter-graph display both read the cutoff through here, so there is
+    /// one copy of the relation.
+    static double modulatedCutoffOctaves(double cutoffOctaves, double envAmount, double drawing) {
+        return cutoffOctaves - envAmount * (1.0 - drawing);
+    }
+
+    /// Publishes everything an editor's filter graph needs, the same relaxed way as the envelope
+    /// playhead: where the filter is now, its Q, and the two ends of the range the drawing sweeps.
+    /// Editors draw these; they never work the cutoff relation or the RES remap out themselves.
+    /// `cutoffOctaves` is log2 hertz, as the cutoff smoother holds it.
+    void storeFilterDisplay(double cutoffOctaves, double envAmount, double drawing, float resonanceAmount) {
+        const auto publish = [](uint32_t& bits, double value) {
+            bdd::atomics::storeRelaxed(bits, std::bit_cast<uint32_t>(float(value)));
+        };
+        publish(mDisplayCutoffBits, std::exp2(modulatedCutoffOctaves(cutoffOctaves, envAmount, drawing)));
+        publish(mDisplayFilterQBits, bdd::StateVariableFilter::qForResonance(resonanceRange(resonanceAmount)));
+        publish(mDisplayCutoffTopBits, std::exp2(modulatedCutoffOctaves(cutoffOctaves, envAmount, 1.0)));
+        publish(mDisplayCutoffBottomBits, std::exp2(modulatedCutoffOctaves(cutoffOctaves, envAmount, 0.0)));
+    }
+
+    /// The filter inputs as the smoothers currently hold them, which is what the last rendered
+    /// frame used. On the silent path they are the settled targets.
+    void storeFilterDisplayFromSmoothers(double drawing) {
+        storeFilterDisplay(double(mCutoffSmoother.current), double(mEnvAmountSmoother.current),
+                           drawing, mResonanceSmoother.current);
     }
     /// The offset the post-downsample fold adds before folding and takes away after, which folds
     /// the two halves of the wave differently (the owner's Max experiment used 0.15).
@@ -1278,7 +1339,7 @@ private:
     float mReleaseMilliseconds = 150.0f;
     float mEnvAmount = 3.0f;
     int mEnvTimeMode = envelopeSync;
-    int mEnvSyncLength = 6;   // 1/8
+    int mEnvSyncLength = 16;   // 1.5 bars
     float mEnvFreeMilliseconds = 500.0f;
     int mEnvDirection = 0;    // Forward
     int mEnvRetrigger = 0;
@@ -1396,4 +1457,8 @@ private:
     bdd::EnvelopeClock mEnvelopeClock;
     uint32_t mDisplayPositionBits = 0;
     uint32_t mDisplayValueBits = 0;
+    uint32_t mDisplayCutoffBits = 0;
+    uint32_t mDisplayFilterQBits = 0;
+    uint32_t mDisplayCutoffTopBits = 0;
+    uint32_t mDisplayCutoffBottomBits = 0;
 };

@@ -19,11 +19,15 @@
 //      pong { token }             the answer to window.bdd.ping(token): the page is alive
 //
 //  Plug-in -> page, by calling window.bdd.receive(state), where `state` has any of:
-//      descriptor                 every parameter's address, name, group, range, default, unit and
-//                                 options, and the factory drawing names (sent once, after hello)
+//      descriptor                 every parameter's address, name, group, range, default, unit,
+//                                 options and, where the plug-in owns the reading, valueDisplays
+//                                 (readings sampled across the range), plus the factory drawing
+//                                 names (sent once, after hello)
 //      params { id: value }       parameter values: all of them after hello, then only changes
 //      curve { points, table }    the drawing's points and the curve as the envelope plays it
-//      display { position, value } the envelope's playhead, about 30 times a second
+//      display                    about 30 times a second: the envelope's playhead
+//                                 { position, value } and the filter as the kernel set it
+//                                 { cutoffHz, filterQ, cutoffTopHz, cutoffBottomHz }
 //
 
 import AudioToolbox
@@ -37,6 +41,8 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Points the page draws the curve with.
     private static let tableSize = 256
     private static let updateInterval: TimeInterval = 1.0 / 30.0
+    /// How many readings a plug-in-owned display is sampled at across a parameter's range.
+    private static let derivedDisplaySteps = 101
 
     let webView: WKWebView
     /// What the view controller shows: the web view inside a view that reports when it becomes
@@ -206,6 +212,39 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             audioUnit.loadFactoryShape(index)
             sendCurve()
 
+        case "presetList":
+            sendPresetState()
+
+        case "presetSelect":
+            guard let number = (body["number"] as? NSNumber)?.intValue else { return }
+            guard let preset = (number < 0 ? audioUnit.userPresets : audioUnit.factoryPresets ?? []).first(where: { $0.number == number }) else {
+                sendPresetState(message: "That preset is no longer available.", error: true)
+                return
+            }
+            audioUnit.currentPreset = preset
+            sendFullState()
+            sendPresetState(message: "Loaded preset.")
+
+        case "presetSave":
+            guard let name = body["name"] as? String else { return }
+            do {
+                _ = try audioUnit.createUserPreset(named: name)
+                sendFullState()
+                sendPresetState(message: "Preset saved.")
+            } catch {
+                sendPresetState(message: presetErrorMessage(error), error: true)
+            }
+
+        case "presetDelete":
+            guard let number = (body["number"] as? NSNumber)?.intValue, number < 0 else { return }
+            do {
+                try audioUnit.removeUserPreset(number: number)
+                sendFullState()
+                sendPresetState(message: "Preset deleted.")
+            } catch {
+                sendPresetState(message: "Could not delete that preset.", error: true)
+            }
+
         case "error":
             let text = body["message"] as? String ?? "?"
             let source = (body["source"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
@@ -264,15 +303,54 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             if let strings = parameter.valueStrings {
                 entry["options"] = strings
             }
+            // Readings the plug-in owns, sampled once across the range so the page can look one up
+            // instead of knowing the mapping. Evenly spaced from min to max, ends included.
+            if YoiExtensionAudioUnit.derivedDisplayIdentifiers.contains(parameter.identifier) {
+                entry["valueDisplays"] = (0..<Self.derivedDisplaySteps).map { step in
+                    let fraction = AUValue(step) / AUValue(Self.derivedDisplaySteps - 1)
+                    let value = parameter.minValue + (parameter.maxValue - parameter.minValue) * fraction
+                    return parameter.string(fromValue: [value])
+                }
+            }
             return entry
         }
         changedAddresses.removeAll()
+        let filter = audioUnit.filterDisplay
+        let display = audioUnit.envelopeDisplay
         send([
             "descriptor": ["parameters": parameters, "shapes": audioUnit.factoryShapeNames],
             "params": values,
             "curve": curveState(),
+            "presetState": presetState(from: audioUnit),
+            // Included so the filter graph has something to draw on the page's first frame.
+            "display": Self.displayPayload(display: display, filter: filter),
         ])
         sentCurveRevision = audioUnit.curveRevision
+    }
+
+    private func sendPresetState(message: String? = nil, error: Bool = false) {
+        guard let audioUnit else { return }
+        var state: [String: Any] = ["presetState": presetState(from: audioUnit)]
+        if let message { state["status"] = ["message": message, "error": error] }
+        send(state)
+    }
+
+    private func presetState(from audioUnit: YoiExtensionAudioUnit) -> [String: Any] {
+        let current = audioUnit.currentPreset
+        return [
+            "factoryPresets": (audioUnit.factoryPresets ?? []).map { ["number": $0.number, "name": $0.name, "kind": "factory"] as [String: Any] },
+            "userPresets": audioUnit.userPresets.map { ["number": $0.number, "name": $0.name, "kind": "user"] as [String: Any] },
+            "currentPreset": current.map { ["number": $0.number, "name": $0.name, "kind": $0.number < 0 ? "user" : "factory"] as [String: Any] } ?? [:],
+        ]
+    }
+
+    private func presetErrorMessage(_ error: Error) -> String {
+        guard let presetError = error as? YoiExtensionAudioUnit.PresetError else { return "Could not save that preset." }
+        switch presetError {
+        case .emptyName: return "Enter a preset name."
+        case .duplicateName: return "A user preset already has that name."
+        case .notFound: return "That preset is no longer available."
+        }
     }
 
     private func sendCurve() {
@@ -300,8 +378,23 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             sentCurveRevision = audioUnit.curveRevision
         }
         let display = audioUnit.envelopeDisplay
-        state["display"] = ["position": display.position, "value": display.value]
+        let filter = audioUnit.filterDisplay
+        state["display"] = Self.displayPayload(display: display, filter: filter)
         send(state)
+    }
+
+    /// The playhead plus the filter as the kernel last set it. The page draws the filter graph and
+    /// the drawing's labels from these; it never works the cutoff relation out itself.
+    private static func displayPayload(display: (position: Float, value: Float),
+                                       filter: (cutoffHertz: Float, q: Float, topHertz: Float, bottomHertz: Float)) -> [String: Any] {
+        [
+            "position": display.position,
+            "value": display.value,
+            "cutoffHz": filter.cutoffHertz,
+            "filterQ": filter.q,
+            "cutoffTopHz": filter.topHertz,
+            "cutoffBottomHz": filter.bottomHertz,
+        ]
     }
 
     private func curveState() -> [String: Any] {

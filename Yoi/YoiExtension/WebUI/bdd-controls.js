@@ -494,10 +494,21 @@
                 show(value);
             },
         };
+        // `options.icons`: one SVG per button, drawn in place of its label. The label still names
+        // the button, for screen readers and as its tooltip. The markup must come from the
+        // product's own code, never from a parameter or preset name.
+        const icons = options.icons || [];
         const buttons = labels.map((label, index) => {
             const button = document.createElement('button');
             button.type = 'button';
-            button.textContent = label;
+            if (icons[index]) {
+                button.innerHTML = icons[index];
+                button.classList.add('icon');
+                button.setAttribute('aria-label', label);
+                button.title = label;
+            } else {
+                button.textContent = label;
+            }
             button.setAttribute('role', 'radio');
             button.addEventListener('click', () => control.gesture.once(values[index]));
             element.appendChild(button);

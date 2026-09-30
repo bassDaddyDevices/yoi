@@ -71,6 +71,8 @@
 }
 .bdd-choice button:hover { color: var(--bdd-ink-soft); }
 .bdd-choice button.selected { background: var(--bdd-raised); color: var(--bdd-ink); }
+.bdd-choice button.icon { display: grid; place-items: center; min-width: 30px; padding: 0 6px; }
+.bdd-choice button.icon svg { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
 /* LEVEL: a tall fader with a stereo meter beside it. */
 .bdd-level { display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: ns-resize; touch-action: none; user-select: none; }
@@ -111,10 +113,6 @@
 .bdd-filter-response { fill: none; stroke: var(--bdd-accent); stroke-width: 2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px color-mix(in srgb, var(--bdd-accent) 55%, transparent)); }
 .bdd-filter-response[data-mode="bp"] { stroke: #77c9ed; filter: drop-shadow(0 0 2px rgba(119,201,237,.55)); }
 .bdd-filter-cutoff { fill: none; stroke: var(--bdd-ink); stroke-width: 1; stroke-dasharray: 3 3; opacity: .78; vector-effect: non-scaling-stroke; }
-.bdd-pad-grid { fill: none; stroke: #1c2025; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.bdd-pad-peak { fill: none; stroke: var(--bdd-accent); stroke-width: 1.5; opacity: 0.28; vector-effect: non-scaling-stroke; }
-.bdd-pad-peak-fill { fill: var(--bdd-accent); opacity: 0.05; }
-.bdd-pad-art { position: absolute; inset: 0; width: 100%; height: 100%; }
 .bdd-pad-grid { fill: none; stroke: #1c2025; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .bdd-pad-peak { fill: none; stroke: var(--bdd-accent); stroke-width: 1.5; opacity: 0.28; vector-effect: non-scaling-stroke; }
 .bdd-pad-peak-fill { fill: var(--bdd-accent); opacity: 0.05; }

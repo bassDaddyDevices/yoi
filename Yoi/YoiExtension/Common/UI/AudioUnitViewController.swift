@@ -5,7 +5,6 @@
 //  Created by Chris Connelly on 2026-09-26.
 //
 
-import Combine
 import CoreAudioKit
 import os
 import SwiftUI
@@ -25,34 +24,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     static let editorSize = NSSize(width: 1040, height: 640)   // the page's design size; it scales to fit
     
     private var observation: NSKeyValueObservation?
-
-	/* iOS View lifcycle
-	public override func viewWillAppear(_ animated: Bool) {
-		super.viewWillAppear(animated)
-
-		// Recreate any view related resources here..
-	}
-
-	public override func viewDidDisappear(_ animated: Bool) {
-		super.viewDidDisappear(animated)
-
-		// Destroy any view related content here..
-	}
-	*/
-
-	/* macOS View lifcycle
-	public override func viewWillAppear() {
-		super.viewWillAppear()
-		
-		// Recreate any view related resources here..
-	}
-
-	public override func viewDidDisappear() {
-		super.viewDidDisappear()
-
-		// Destroy any view related content here..
-	}
-	*/
 
 	deinit {
         let editor = webEditor

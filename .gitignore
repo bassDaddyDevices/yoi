@@ -37,3 +37,6 @@ DerivedData/
 .idea/
 .vscode/
 .cache/
+
+# Generated agent skill tables (openskills); local to each machine
+AGENTS.md

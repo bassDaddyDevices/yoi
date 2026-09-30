@@ -83,6 +83,20 @@
             post({ type: 'loadShape', index });
         },
 
+        /** Preset commands; metadata only, the complete state stays native to the AU host. */
+        requestPresets() {
+            post({ type: 'presetList' });
+        },
+        selectPreset(number) {
+            post({ type: 'presetSelect', number });
+        },
+        savePreset(name) {
+            post({ type: 'presetSave', name });
+        },
+        deletePreset(number) {
+            post({ type: 'presetDelete', number });
+        },
+
         /** Called by the plug-in to check the page is alive (after its window has been hidden a
          *  while, for example); the page answers straight away. */
         ping(token) {

@@ -101,6 +101,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		setupParameterCallbacks()
+        currentPreset = factoryPresets?.first
 	}
 
 	private func setupParameterCallbacks() {
@@ -119,6 +120,10 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			guard let value = valuePtr?.pointee else {
 				return "-"
 			}
+
+            if let derived = YoiExtensionAudioUnit.derivedDisplay(identifier: param.identifier, value: value) {
+                return derived
+            }
 
             switch param.unit {
             case .decibels:
@@ -153,6 +158,31 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             }
 		}
 	}
+
+    // MARK: - Derived readings
+
+    /// Parameters whose reading the plug-in owns, by identifier. OTT TIME is stored as a percent,
+    /// but what it means is the compressor's release in milliseconds, and only the kernel knows
+    /// that mapping. Hosts and the editor both take their text from here, so the relation is
+    /// written down once (in the kernel) instead of being repeated in the page.
+    static let derivedDisplayIdentifiers: Set<String> = ["ottTime"]
+
+    static func derivedDisplay(identifier: String, value: AUValue) -> String? {
+        switch identifier {
+        case "ottTime":
+            return "\(Int(YoiExtensionDSPKernel.ottReleaseMilliseconds(value).rounded())) ms"
+        default:
+            return nil
+        }
+    }
+
+    /// The filter as the last rendered block set it: the cutoff in hertz with the drawing applied,
+    /// its Q, and the two ends of the range the drawing sweeps. Editors draw these instead of
+    /// re-deriving the cutoff relation or the RES remap.
+    var filterDisplay: (cutoffHertz: Float, q: Float, topHertz: Float, bottomHertz: Float) {
+        (kernel.filterDisplayCutoffHertz(), kernel.filterDisplayQ(),
+         kernel.filterDisplayTopHertz(), kernel.filterDisplayBottomHertz())
+    }
 
     // MARK: - Drawn envelope
 
@@ -221,19 +251,133 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     // MARK: - State
 
     private static let envelopeCurveStateKey = "yoiEnvelopeCurve"
+    private static let stateVersionKey = "yoiStateVersion"
 
-    /// The parameter tree covers the knobs; the drawing is saved alongside them by hand.
+    public override var currentPreset: AUAudioUnitPreset? {
+        get { super.currentPreset }
+        set {
+            guard let preset = newValue else {
+                super.currentPreset = nil
+                return
+            }
+            if preset.number >= 0 {
+                guard (factoryPresets ?? []).contains(where: { $0.number == preset.number }) else { return }
+                resetToDefaults()
+                super.currentPreset = preset
+                return
+            }
+            guard let state = try? presetState(for: preset) else { return }
+            super.fullState = state
+            if let points = state[Self.envelopeCurveStateKey] as? [[NSNumber]] {
+                envelopeCurve = points.map { point in point.map { $0.floatValue } }
+            } else {
+                loadFactoryShape(0)
+            }
+            super.currentPreset = preset
+        }
+    }
+
+    public override var supportsUserPresets: Bool { true }
+
+    public override var factoryPresets: [AUAudioUnitPreset]? {
+        let preset = AUAudioUnitPreset()
+        preset.number = 0
+        preset.name = "Init"
+        return [preset]
+    }
+
+    /// The parameter tree covers the knobs; the drawn envelope is saved alongside them.
     public override var fullState: [String : Any]? {
         get {
             var state = super.fullState ?? [:]
             state[Self.envelopeCurveStateKey] = envelopeCurve
+            state[Self.stateVersionKey] = 1
             return state
         }
         set {
             super.fullState = newValue
-            if let points = newValue?[Self.envelopeCurveStateKey] as? [[NSNumber]] {
-                envelopeCurve = points.map { point in point.map { $0.floatValue } }
+            guard let newValue,
+                  let points = newValue[Self.envelopeCurveStateKey] as? [[NSNumber]] else {
+                loadFactoryShape(0)
+                return
+            }
+            envelopeCurve = points.map { point in point.map { $0.floatValue } }
+        }
+    }
+
+    // MARK: - Presets
+
+    /// Guards `lastUserPresetNumber`, so two instances saving a preset at the same time can't
+    /// claim the same number.
+    private static let presetNumberLock = NSLock()
+
+    /// The next user preset number to hand out. User preset numbers are negative and count
+    /// downwards; -1 is the first one.
+    nonisolated(unsafe) private static var lastUserPresetNumber = -1
+
+    public var presetUserPresets: [[String: Any]] {
+        userPresets.map { ["number": $0.number, "name": $0.name, "kind": "user"] }
+    }
+
+    public var presetFactoryPresets: [[String: Any]] {
+        (factoryPresets ?? []).map { ["number": $0.number, "name": $0.name, "kind": "factory"] }
+    }
+
+    public var presetCurrentPreset: [String: Any]? {
+        guard let preset = currentPreset else { return nil }
+        return ["number": preset.number, "name": preset.name, "kind": preset.number < 0 ? "user" : "factory"]
+    }
+
+    public func createUserPreset(named name: String) throws -> AUAudioUnitPreset {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { throw PresetError.emptyName }
+        guard !userPresets.contains(where: { $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame }) else {
+            throw PresetError.duplicateName
+        }
+        Self.presetNumberLock.lock()
+        let minimumNumber = userPresets.map(\.number).filter { $0 < 0 }.min() ?? 0
+        let number = min(Self.lastUserPresetNumber, minimumNumber - 1)
+        let previousNextNumber = Self.lastUserPresetNumber
+        Self.lastUserPresetNumber = number - 1
+        Self.presetNumberLock.unlock()
+
+        let preset = AUAudioUnitPreset()
+        preset.number = number
+        preset.name = trimmedName
+        let previousPreset = super.currentPreset
+        super.currentPreset = preset
+        do {
+            try saveUserPreset(preset)
+            super.currentPreset = preset
+            return preset
+        } catch {
+            super.currentPreset = previousPreset
+            Self.presetNumberLock.lock()
+            Self.lastUserPresetNumber = previousNextNumber
+            Self.presetNumberLock.unlock()
+            throw error
+        }
+    }
+
+    public func removeUserPreset(number: Int) throws {
+        guard let preset = userPresets.first(where: { $0.number == number }) else { throw PresetError.notFound }
+        try deleteUserPreset(preset)
+        if currentPreset?.number == number { currentPreset = nil }
+    }
+
+    private func resetToDefaults() {
+        guard let parameterTree else { return }
+        for parameter in parameterTree.allParameters {
+            if let value = YoiExtensionParameterSpecs.defaultValues[parameter.address] {
+                parameter.value = value
             }
         }
+        loadFactoryShape(0)
+    }
+
+    public enum PresetError: Error {
+        case emptyName
+        case duplicateName
+        case notFound
     }
 }

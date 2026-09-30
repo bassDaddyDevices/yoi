@@ -42,6 +42,11 @@ func unitName(_ unit: AudioUnitParameterUnit) -> String {
     }
 }
 
+// Readings the plug-in owns rather than the unit (see YoiExtensionAudioUnit.derivedDisplayIdentifiers
+// and WebEditor.derivedDisplaySteps). Sampled across the range so the stand-in shows what YOI shows.
+let derivedDisplayIdentifiers: Set<String> = ["ottTime"]
+let derivedDisplaySteps = 101
+
 var parameters: [[String: Any]] = []
 var values: [String: Any] = [:]
 for parameter in tree.allParameters {
@@ -58,6 +63,13 @@ for parameter in tree.allParameters {
     ]
     if let strings = parameter.valueStrings {
         entry["options"] = strings
+    }
+    if derivedDisplayIdentifiers.contains(parameter.identifier) {
+        entry["valueDisplays"] = (0..<derivedDisplaySteps).map { step in
+            let fraction = AUValue(step) / AUValue(derivedDisplaySteps - 1)
+            let value = parameter.minValue + (parameter.maxValue - parameter.minValue) * fraction
+            return parameter.string(fromValue: [value])
+        }
     }
     parameters.append(entry)
     values[String(parameter.address)] = parameter.value

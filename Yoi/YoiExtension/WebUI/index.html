@@ -15,10 +15,15 @@
                 <span class="maker">BASS DADDY DEVICES</span>
             </div>
             <div id="badge" class="badge" hidden></div>
-            <div class="preset-placeholder" aria-label="Preset browser coming later">
-                <span class="eyebrow">PRESET</span>
-                <span class="preset-name">—</span>
-                <span class="coming-soon">PRESETS COMING LATER</span>
+            <div id="preset-controls" class="preset-controls" aria-label="Presets">
+                <button id="preset-select" class="preset-select" type="button" aria-haspopup="listbox" aria-label="Select preset">
+                    <span class="preset-kicker">PRESET</span>
+                    <span id="preset-name" class="preset-name">UNSAVED PATCH</span>
+                    <span class="preset-chevron" aria-hidden="true">▾</span>
+                </button>
+                <button id="preset-save" class="preset-action" type="button">SAVE AS</button>
+                <button id="preset-delete" class="preset-action delete" type="button" disabled>DELETE</button>
+                <span id="preset-status" class="preset-status" role="status" hidden></span>
             </div>
             <button id="details-toggle" class="details-toggle" type="button" aria-expanded="false" aria-controls="details-sheet">DETAILS</button>
         </header>
@@ -50,14 +55,8 @@
                         <div id="ds-mode"></div>
                         <div id="ds-lock"></div>
                     </div>
-                    <div id="ds-value"></div>
                 </div>
             </section>
-
-            <aside class="level-card bdd-card" aria-label="Output level">
-                <span class="section-title">LEVEL</span>
-                <div id="level-control"></div>
-            </aside>
         </section>
 
         <section class="bottom-row" aria-label="Performance controls">
@@ -67,6 +66,12 @@
                 <div class="cutoff-mode" id="cutoff-mode"></div>
             </div>
         </section>
+
+        <!-- Its own column beside both rows, so the fader runs from the top card to the bottom. -->
+        <aside class="level-card bdd-card" aria-label="Output level">
+            <span class="section-title">LEVEL</span>
+            <div id="level-control"></div>
+        </aside>
 
         <section id="details-sheet" class="details-sheet" aria-label="Additional controls" aria-hidden="true">
             <div class="sheet-header">
@@ -82,6 +87,21 @@
                 <section class="details-page" data-page="1" aria-label="Envelope settings" hidden></section>
                 <section class="details-page" data-page="2" aria-label="Finish settings" hidden></section>
             </div>
+        </section>
+        <section id="preset-dialog" class="preset-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-dialog-title" hidden>
+            <form id="preset-form" class="preset-dialog-card">
+                <div class="preset-dialog-heading">
+                    <span class="eyebrow">USER PRESET</span>
+                    <button id="preset-dialog-close" class="close-button" type="button" aria-label="Close dialog">×</button>
+                </div>
+                <h2 id="preset-dialog-title">Save preset</h2>
+                <p id="preset-dialog-message">Name this sound so you can find it again.</p>
+                <label id="preset-name-field" class="preset-name-field">NAME<input id="preset-name-input" type="text" maxlength="80" autocomplete="off" spellcheck="false"></label>
+                <div class="preset-dialog-actions">
+                    <button id="preset-cancel" class="preset-action" type="button">CANCEL</button>
+                    <button id="preset-confirm" class="preset-action primary" type="submit">SAVE PRESET</button>
+                </div>
+            </form>
         </section>
     </main>
 

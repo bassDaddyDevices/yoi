@@ -106,13 +106,17 @@
 
         function pointAt(px, py) {
             let best = -1;
-            let bestDistance = options.hitRadius;
+            let bestDistance = Infinity;
+            const last = state.points.length - 1;
             state.points.forEach(([x, y], index) => {
                 const [sx, sy] = toScreen(x, y);
+                // An end point only moves up and down, so when an inner point sits on top of one
+                // (within a pixel), the inner point wins: otherwise it could never be dragged off.
+                const penalty = (index === 0 || index === last) ? 1 : 0;
                 const distance = Math.hypot(sx - px, sy - py);
-                if (distance <= bestDistance) {
+                if (distance <= options.hitRadius && distance + penalty <= bestDistance) {
                     best = index;
-                    bestDistance = distance;
+                    bestDistance = distance + penalty;
                 }
             });
             return best;
@@ -337,6 +341,11 @@
             return true;
         }
 
+        /// How close an inner point may come to either end, as a fraction of the width: one step
+        /// of the plug-in's table. Inner points may share an `x` with each other (that's a jump,
+        /// as in a gate), but a jump at an end would hide the end point's level entirely.
+        const END_GAP = 1 / 1024;
+
         function movePoint(index, x, y, snapping) {
             const points = state.points;
             y = clamp(snap(y, 8, snapping), 0, 1);
@@ -345,7 +354,9 @@
             } else if (index === points.length - 1) {
                 x = 1;
             } else {
-                x = clamp(snap(x, 16, snapping), points[index - 1][0], points[index + 1][0]);
+                const low = index === 1 ? END_GAP : points[index - 1][0];
+                const high = index === points.length - 2 ? 1 - END_GAP : points[index + 1][0];
+                x = clamp(snap(x, 16, snapping), low, high);
             }
             points[index] = [x, y, points[index][2] || 0];
         }

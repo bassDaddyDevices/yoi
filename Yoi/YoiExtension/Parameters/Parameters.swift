@@ -210,7 +210,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Env Sync",
             units: .indexed,
             valueRange: 0...AUValue(syncLengthNames.count - 1),
-            defaultValue: 6,
+            defaultValue: 16,   // 1.5 bars
             valueStrings: syncLengthNames
         )
         ParameterSpec(

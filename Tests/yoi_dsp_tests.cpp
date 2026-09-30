@@ -177,7 +177,7 @@ void testDefaultsMatchParameterTree() {
         { oscShape, 0.0f }, { subLevel, 75.0f }, { subShape, 0.0f }, { subOctave, 0.0f },
         { subCrossover, 130.0f }, { filterMode, 0.0f }, { cutoff, 800.0f }, { resonance, 30.0f },
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
-        { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 6.0f }, { envFreeTime, 500.0f },
+        { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 16.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
         { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 70.0f },
         { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 16.0f },
@@ -1546,10 +1546,16 @@ void testMacros() {
     };
     CHECK(playMirrorInLowPass(100.0f) == playMirrorInLowPass(0.0f), "MIRROR should do nothing in LP");
 
+    // Loudness is compared over the whole drawing, so the envelope must make several passes inside
+    // the 1.5 s measured: 1/8 (six passes at the test tempo), which is what these limits were
+    // measured at. With the 1.5-bar default the window would see only part of one pass.
+    constexpr float kLoudnessSyncLength = 6.0f;   // 1/8
+
     // POWER changes density, never loudness: in LUFS, every step stays within 0.25 LU of POWER 0
     // (measured: within 0.04 LU across six notes, three of them not in the fit).
     auto playPower = [](int note, float power) {
         auto k = makeKernel(kSampleRate, true, true, true);
+        k->setParameter(envSyncLength, kLoudnessSyncLength);
         k->setParameter(macroPower, power);
         k->noteOn(note, 100);
         std::vector<float> left, right;
@@ -1576,6 +1582,7 @@ void testMacros() {
     // The same for VOICE, THROAT, CONTROL and WIDTH, from each one's default position.
     auto playMacro = [](int note, AUParameterAddress macro, float value) {
         auto k = makeKernel(kSampleRate, true, true, true);
+        k->setParameter(envSyncLength, kLoudnessSyncLength);
         k->setParameter(macro, value);
         k->noteOn(note, 100);
         std::vector<float> left, right;
