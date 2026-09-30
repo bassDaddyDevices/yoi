@@ -112,6 +112,14 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             defaultValue: 130.0,
             flags: logarithmic
         )
+        ParameterSpec(
+            address: .subFollow,
+            identifier: "subFollow",
+            name: "Sub Follow",
+            units: .percent,
+            valueRange: 0.0...100.0,
+            defaultValue: 0.0
+        )
     }
     ParameterGroupSpec(identifier: "filter", name: "Filter") {
         ParameterSpec(

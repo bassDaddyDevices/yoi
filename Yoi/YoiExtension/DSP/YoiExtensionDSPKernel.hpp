@@ -52,11 +52,12 @@
          -> [wavefolder, pre-filter] -> state-variable filter (low-pass or band-pass)
          -> [wavefolder, pre-downsample] -> downsampler (S&H or Downsample)
          -> [wavefolder, post-downsample, uneven] -> clean-up low-pass (a multiple of the moving
-            cutoff) -> harmonic booster -> amp envelope -> OTT-style compressor
+            cutoff) -> harmonic booster -> [POWER saturation] -> amp envelope -> OTT-style compressor
          -> dimension expander (mono in, stereo out) --------------------------------+
      pitch -> sub oscillator (sine <-> triangle, one or two octaves down)            |
-         -> low-pass at X-OVER -> amp envelope (the sub skips everything above) -----+-> merge
-     merge -> output level -> soft limiter -> left and right
+         -> low-pass at X-OVER -> amp envelope -> [SUB FOLLOW: the level the top gets
+            through the filter and grit] (the sub skips everything above) -----------+-> merge
+     merge -> output level (and POWER's lift) -> soft limiter -> left and right
 
      drawn envelope: clock (Sync to the host, or Free) -> direction -> read the drawing (0...1)
          -> filter cutoff = CUTOFF lowered by Amount x (1 - drawing), in octaves
@@ -99,11 +100,16 @@ public:
                                 &mCleanupMultipleSmoother, &mSubCrossoverSmoother, &mBoostSmoother,
                                 &mOttDepthSmoother, &mOttUpwardSmoother, &mWidthSmoother,
                                 &mMirrorSmoother, &mDriveSmoother, &mLockSmoother, &mPowerSmoother,
-                                &mVoiceMacroSmoother, &mControlMacroSmoother, &mWidthMacroSmoother }) {
+                                &mVoiceMacroSmoother, &mControlMacroSmoother, &mWidthMacroSmoother,
+                                &mSubFollowSmoother }) {
             smoother->setTimeConstant(kSmoothingSeconds, inSampleRate);
         }
         mFoldLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
         mBoostLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
+        mPowerLevel.setTimeConstant(kFoldLevelSeconds, inSampleRate);
+        mPowerDC.setSampleRate(inSampleRate);
+        mPowerSaturator.setBias(kPowerSaturationBias);
+        mSubFollowLevel.setTimes(kSubFollowLoudnessSeconds, kSubFollowGainSeconds, kSubFollowPeakSeconds, inSampleRate);
         mFoldDC.setSampleRate(inSampleRate);
         mOtt.setSampleRate(inSampleRate);
         mAppliedOttTime = -1.0f;   // applied again at the next block, at the new rate
@@ -117,6 +123,8 @@ public:
         snapSmoothers();
         // Seeded here so an editor has a filter graph to draw before the first block renders.
         storeFilterDisplayFromSmoothers(1.0);
+        mMeterLeft = mMeterRight = 0.0f;
+        publishMeters(0.0f, 0.0f, 0);
 
         mHeldNotes.clear();
         mGlide.jump(60.0);
@@ -133,6 +141,7 @@ public:
         mCleanupFilter.reset();
         mMainHighPass.reset();
         mSubLowPass.reset();
+        mSubFollowLevel.reset();
         resetFinish();
         mAppliedCrossoverOctaves = -1.0f;
         mActiveFoldPosition = mFoldPosition;
@@ -184,6 +193,9 @@ public:
                 break;
             case YoiExtensionParameterAddress::subCrossover:
                 mSubCrossoverHertz = std::clamp(value, 50.0f, 700.0f);
+                break;
+            case YoiExtensionParameterAddress::subFollow:
+                mSubFollow = std::clamp(value * 0.01f, 0.0f, 1.0f);
                 break;
             case YoiExtensionParameterAddress::filterMode:
                 mFilterMode = std::clamp(int(std::lround(value)), 0, 1);
@@ -324,6 +336,7 @@ public:
             case YoiExtensionParameterAddress::subShape: return mSubShape * 100.0f;
             case YoiExtensionParameterAddress::subOctave: return AUValue(mSubOctave);
             case YoiExtensionParameterAddress::subCrossover: return mSubCrossoverHertz;
+            case YoiExtensionParameterAddress::subFollow: return mSubFollow * 100.0f;
             case YoiExtensionParameterAddress::filterMode: return AUValue(mFilterMode);
             case YoiExtensionParameterAddress::cutoff: return mCutoffHertz;
             case YoiExtensionParameterAddress::resonance: return mResonance * 100.0f;
@@ -545,6 +558,15 @@ public:
         return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mDisplayCutoffBottomBits)));
     }
 
+    /// The output meters: each channel's held peak, linear (1 is 0 dBFS), after the limiter.
+    float outputMeterLeft() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mMeterLeftBits)));
+    }
+
+    float outputMeterRight() const {
+        return std::bit_cast<float>(bdd::atomics::loadRelaxed(const_cast<uint32_t&>(mMeterRightBits)));
+    }
+
     /// OTT's release in milliseconds at a given OTT TIME percent, for an editor's readout. Attack
     /// moves with it; `MultibandCompressor` holds both times.
     static float ottReleaseMilliseconds(float percent) {
@@ -633,6 +655,7 @@ public:
             // The graph still follows CUTOFF, RES and AMOUNT while nothing sounds. Nothing is
             // modulating, so it sits at the top of the drawing, where the envelope leaves it alone.
             storeFilterDisplayFromSmoothers(1.0);
+            publishMeters(0.0f, 0.0f, frameCount);
             for (auto* buffer : outputBuffers) {
                 std::fill_n(buffer, frameCount, 0.f);
             }
@@ -657,6 +680,8 @@ public:
 
         double drawingPosition = 0.0;
         float drawing = 0.0f;
+        float peakLeft = 0.0f;    // for the output meters, after the limiter
+        float peakRight = 0.0f;
 
         for (uint32_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
             const float mainMorph = mOscShapeSmoother.next(mOscShape);
@@ -786,12 +811,31 @@ public:
             const double cleanupAmount = double(mCleanupWeight.next(cleanupTarget));
             const double tamed = (1.0 - cleanupAmount) * gritty + cleanupAmount * cleaned;
 
+            // SUB FOLLOW: the sub swells and dips with how much of the oscillator the filter and
+            // grit let through, so it moves with the top instead of sitting under it unchanged.
+            // Full level wherever the top is most open. It always listens, so turning it up never
+            // starts from a stale level; at 0 the sub is exactly as it was.
+            const double followGain = mSubFollowLevel.process(mix, tamed);
+            const double follow = double(mSubFollowSmoother.next(mSubFollow));
+            const double subFollowGain = 1.0 - follow + follow * followGain;
+
             // Harmonic booster: peaks at 3, 5 and 7 x the note, level-matched, so it brings the
             // pitch forward through the grit without making it louder.
             const double boost = double(mBoostSmoother.next(mBoostAmount));
             mHarmonicBooster.setFundamental(bdd::noteToHertz(pitch), mSampleRate);
             const double boosted = mHarmonicBooster.process(tamed, boost);
             const double brightened = (boost > 0.0) ? mBoostLevel.process(tamed, boosted) : tamed;
+
+            // POWER, part one: saturation, driven harder as POWER rises and uneven, for body, then
+            // brought back to the loudness that went in (the loudness is part two's job). It
+            // always runs, so turning POWER up never starts from a stale state; at 0 it is bypassed.
+            const double powerAmount = double(mPowerSmoother.next(mPower));
+            const double powerDrive = 1.0 + (kPowerDriveMaximum - 1.0) * powerAmount;
+            const double saturation = mPowerDC.process(mPowerSaturator.process(brightened / kOscillatorHeadroom * powerDrive));
+            const double saturationMatched = mPowerLevel.process(brightened, saturation);
+            const double powered = (powerAmount > 0.0)
+                ? brightened + std::min(1.0, powerAmount * 20.0) * (saturationMatched - brightened)
+                : brightened;
 
             const double amp = mAmpEnvelope.next();
             // Level stays with LEVEL: VOICE, CONTROL and WIDTH's measured make-up, on the main voice
@@ -801,13 +845,12 @@ public:
                                                   + gridMakeup(kControlMakeupDecibels, double(mControlMacroSmoother.next(mControl)), note)
                                                   + gridMakeup(kWidthMakeupDecibels, double(mWidthMacroSmoother.next(mWidth)), note))
                                                  / 6.020599913);
-            const double top = brightened * amp * macroMakeup;
+            const double top = powered * amp * macroMakeup;
 
             // OTT-style compression on everything but the sub. Its crossover is in the path only
             // while it's in use, faded in and out so turning it on or off never clicks.
             const double ottDepth = double(mOttDepthSmoother.next(mOttDepth));
             const double ottUpward = double(mOttUpwardSmoother.next(mOttUpward));
-            const double powerAmount = double(mPowerSmoother.next(mPower));
             const double ottWeight = double(mOttWeight.next(mOttDepth > 0.0f ? 1.0f : 0.0f));
             double compressed = top;
             if (ottWeight > 0.0) {
@@ -817,15 +860,23 @@ public:
 
             // Width, then the sub back in, in the middle.
             const auto stereo = mDimension.process(compressed, double(mWidthSmoother.next(mWidthAmount)));
-            const double subVoice = kOscillatorHeadroom * double(subGain) * subBelow * amp;
-            const float left = bdd::softLimit(float((stereo.left + subVoice) * double(outputGain)));
-            const float right = bdd::softLimit(float((stereo.right + subVoice) * double(outputGain)));
+            const double subVoice = kOscillatorHeadroom * double(subGain) * subBelow * amp * subFollowGain;
+            // POWER, part two: a little louder, sub and all, so turning it up adds body and not
+            // just density.
+            const double level = double(outputGain) * std::exp2(kPowerLiftDecibels * powerAmount / 6.020599913);
+            const float left = bdd::softLimit(float((stereo.left + subVoice) * level));
+            const float right = bdd::softLimit(float((stereo.right + subVoice) * level));
 
             if (outputBuffers.size() == 1) {
-                outputBuffers[0][frameIndex] = bdd::softLimit(float((compressed + subVoice) * double(outputGain)));
+                const float mono = bdd::softLimit(float((compressed + subVoice) * level));
+                outputBuffers[0][frameIndex] = mono;
+                peakLeft = std::max(peakLeft, std::fabs(mono));
+                peakRight = peakLeft;
             } else {
                 outputBuffers[0][frameIndex] = left;
                 outputBuffers[1][frameIndex] = right;
+                peakLeft = std::max(peakLeft, std::fabs(left));
+                peakRight = std::max(peakRight, std::fabs(right));
                 for (size_t channel = 2; channel < outputBuffers.size(); ++channel) {
                     outputBuffers[channel][frameIndex] = 0.5f * (left + right);
                 }
@@ -835,6 +886,7 @@ public:
         bdd::atomics::storeRelaxed(mDisplayPositionBits, std::bit_cast<uint32_t>(float(drawingPosition)));
         bdd::atomics::storeRelaxed(mDisplayValueBits, std::bit_cast<uint32_t>(drawing));
         storeFilterDisplayFromSmoothers(double(drawing));
+        publishMeters(peakLeft, peakRight, frameCount);
     }
 
 #if YOI_AUDIO_UNIT
@@ -1037,6 +1089,21 @@ private:
         storeFilterDisplay(double(mCutoffSmoother.current), double(mEnvAmountSmoother.current),
                            drawing, mResonanceSmoother.current);
     }
+
+    /// How fast the output meters fall once the signal drops, as DAW peak meters do.
+    static constexpr double kMeterFallDecibelsPerSecond = 24.0;
+
+    /// Publishes each channel's output peak (linear, after the limiter) for an editor's meters.
+    /// The peak is held here and falls steadily, so an editor reading 30 times a second can't miss
+    /// a transient between reads; only the render thread writes it.
+    void publishMeters(float blockPeakLeft, float blockPeakRight, uint32_t frameCount) {
+        const float fall = float(std::exp2(-kMeterFallDecibelsPerSecond / 6.020599913
+                                           * double(frameCount) / mSampleRate));
+        mMeterLeft = std::max(blockPeakLeft, mMeterLeft * fall);
+        mMeterRight = std::max(blockPeakRight, mMeterRight * fall);
+        bdd::atomics::storeRelaxed(mMeterLeftBits, std::bit_cast<uint32_t>(mMeterLeft));
+        bdd::atomics::storeRelaxed(mMeterRightBits, std::bit_cast<uint32_t>(mMeterRight));
+    }
     /// The offset the post-downsample fold adds before folding and takes away after, which folds
     /// the two halves of the wave differently (the owner's Max experiment used 0.15).
     static constexpr double kFoldAsymmetry = 0.15;
@@ -1056,6 +1123,13 @@ private:
     static constexpr float kControlBoostMaximum = 40.0f;
     static constexpr double kControlDriveCurve = 2.0;
     static constexpr float kControlDriveMaximum = 60.0f;
+    /// SUB FOLLOW's timing: each loudness stage averages over 10 ms (two in a row, so the gain
+    /// carries the note's shape, not the ripple of its waveform), the gain eases over 5 ms so it
+    /// never steps, and the loudest point it measures against falls by 1/e in 4 s, long enough
+    /// to span a slow drawing and to carry from one note to the next.
+    static constexpr double kSubFollowLoudnessSeconds = 0.010;
+    static constexpr double kSubFollowGainSeconds = 0.005;
+    static constexpr double kSubFollowPeakSeconds = 4.0;
     /// WIDTH: the sub gives way to the dimension expander. Sub Level at WIDTH 0 and at full; the
     /// full-width value is a first guess, for the owner's ears.
     static constexpr float kWidthSubLevelNarrow = 75.0f;
@@ -1114,6 +1188,16 @@ private:
         const double fraction = (note - kMakeupNotes[n]) / (kMakeupNotes[n + 1] - kMakeupNotes[n]);
         return row(n) + (row(n + 1) - row(n)) * fraction;
     }
+    /// POWER's saturation: the drive into it at full (1x at 0, where it is bypassed anyway) and
+    /// how uneven it is. Both first guesses, for the owner's ears.
+    static constexpr double kPowerDriveMaximum = 4.0;
+    static constexpr double kPowerSaturationBias = 0.3;
+    /// How much louder full POWER is, in dB on the whole output, sub included. Level-matched
+    /// POWER sounded like squash alone; the owner asked for more body, "nothing too insane".
+    /// With the saturation's own half a dB, full POWER measures +3.0 LU at E1 and A1 and +2.4 at
+    /// A2 (2026-09-30, default patch, 140 BPM). Held notes then peak at -4.2 dBFS or below, at the
+    /// limiter's knee; only the attack reaches the limiter, as it did at full POWER before.
+    static constexpr double kPowerLiftDecibels = 2.5;
     static constexpr double kPowerMakeupNote = 33.0;           // A1, where the curve was measured
     static constexpr double kPowerMakeupPerSemitone = 0.030;   // +3 % of the curve per semitone up
     static double powerMakeupDecibels(double power) {
@@ -1157,6 +1241,7 @@ private:
                 mSubOscillator.reset();
                 mSampleAndHold.reset();
                 mSampleCountDownsampler.reset();
+                mSubFollowLevel.restart();
                 resetFinish();
             }
             mAmpEnvelope.gateOn();
@@ -1196,6 +1281,9 @@ private:
     void resetFinish() {
         mHarmonicBooster.reset();
         mBoostLevel.reset();
+        mPowerSaturator.reset();
+        mPowerLevel.reset();
+        mPowerDC.reset();
         mFoldDC.reset();
         mOtt.reset();
         mDimension.reset();
@@ -1293,6 +1381,7 @@ private:
         mFoldAmountSmoother.snap(mFoldAmount);
         mCleanupMultipleSmoother.snap(std::log2(mCleanupMultiple));
         mSubCrossoverSmoother.snap(std::log2(mSubCrossoverHertz));
+        mSubFollowSmoother.snap(mSubFollow);
         mBoostSmoother.snap(mBoostAmount);
         mOttDepthSmoother.snap(mOttDepth);
         mOttUpwardSmoother.snap(mOttUpward);
@@ -1330,6 +1419,7 @@ private:
     float mSubShape = 0.0f;
     int mSubOctave = 0;
     float mSubCrossoverHertz = 130.0f;
+    float mSubFollow = 0.0f;
     int mFilterMode = 0;
     float mCutoffHertz = 800.0f;
     float mResonance = 0.3f;
@@ -1398,6 +1488,7 @@ private:
     bdd::Smoother mCleanupMultipleSmoother;
     bdd::LinearRamp mCleanupWeight;
     bdd::Smoother mSubCrossoverSmoother;
+    bdd::Smoother mSubFollowSmoother;
     bdd::Smoother mBoostSmoother;
     bdd::Smoother mOttDepthSmoother;
     bdd::Smoother mOttUpwardSmoother;
@@ -1428,9 +1519,13 @@ private:
     bdd::ButterworthLowPass4 mCleanupFilter;
     bdd::ButterworthHighPass4 mMainHighPass;
     bdd::ButterworthLowPass4 mSubLowPass;
+    bdd::LevelFollow mSubFollowLevel;
     bdd::DCBlocker mFoldDC;
     bdd::HarmonicBooster mHarmonicBooster;
     bdd::LevelMatch mBoostLevel;
+    bdd::Saturator mPowerSaturator;
+    bdd::LevelMatch mPowerLevel;
+    bdd::DCBlocker mPowerDC;
     bdd::MultibandCompressor mOtt;
     bdd::DimensionExpander mDimension;
 
@@ -1461,4 +1556,8 @@ private:
     uint32_t mDisplayFilterQBits = 0;
     uint32_t mDisplayCutoffTopBits = 0;
     uint32_t mDisplayCutoffBottomBits = 0;
+    float mMeterLeft = 0.0f;      // render thread only
+    float mMeterRight = 0.0f;
+    uint32_t mMeterLeftBits = 0;  // what editors read
+    uint32_t mMeterRightBits = 0;
 };

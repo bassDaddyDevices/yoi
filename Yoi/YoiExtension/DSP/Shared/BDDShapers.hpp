@@ -61,6 +61,53 @@ struct Wavefolder {
     }
 };
 
+/// A soft saturator: tanh, offset by `bias` so the top and bottom of the wave round off
+/// differently. The even harmonics that adds are what make a saturated sound fuller rather than
+/// just brighter. The curve is shifted so 0 still gives 0, but a biased curve leaves some DC on a
+/// loud signal, so follow it with a DC blocker.
+///
+/// Anti-aliased the same way as the wavefolder (first-order ADAA), with half a sample of delay.
+struct Saturator {
+    double bias = 0.0;
+    double previousInput = 0.0;
+    double previousIntegral = 0.0;
+
+    void reset() {
+        previousInput = 0.0;
+        previousIntegral = integral(0.0);
+    }
+
+    void setBias(double newBias) {
+        if (newBias != bias) {
+            bias = newBias;
+            previousIntegral = integral(previousInput);
+        }
+    }
+
+    double curve(double x) const {
+        return std::tanh(x + bias) - std::tanh(bias);
+    }
+
+    /// An antiderivative of `curve`: log(cosh(x + bias)) - tanh(bias) x, written so large inputs
+    /// neither overflow nor lose precision.
+    double integral(double x) const {
+        const double shifted = std::fabs(x + bias);
+        const double logCosh = shifted + std::log1p(std::exp(-2.0 * shifted)) - 0.69314718055994531;
+        return logCosh - std::tanh(bias) * x;
+    }
+
+    inline double process(double input) {
+        const double currentIntegral = integral(input);
+        const double step = input - previousInput;
+        const double output = (std::fabs(step) > 1.0e-6)
+            ? (currentIntegral - previousIntegral) / step
+            : curve(0.5 * (input + previousInput));
+        previousInput = input;
+        previousIntegral = currentIntegral;
+        return output;
+    }
+};
+
 /// Keeps a shaped signal at the loudness of the signal it was made from, so a shaper changes the
 /// tone and not the volume. It follows both signals' power over `seconds` and scales the shaped
 /// one by the ratio, within `kMinimumGain`...`kMaximumGain`.

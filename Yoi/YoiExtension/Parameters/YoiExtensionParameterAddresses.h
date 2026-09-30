@@ -34,6 +34,7 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
     subShape = 22,
     subOctave = 23,
     subCrossover = 24,
+    subFollow = 25,
 
     filterMode = 30,
     cutoff = 31,
@@ -100,6 +101,7 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
     subShape = 22,
     subOctave = 23,
     subCrossover = 24,
+    subFollow = 25,
 
     filterMode = 30,
     cutoff = 31,

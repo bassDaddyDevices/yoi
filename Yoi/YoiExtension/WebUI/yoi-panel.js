@@ -3,7 +3,7 @@
 (function () {
     'use strict';
 
-    const { dial, fader, choice, level, valueButton, readout, tabBar, pad, format, openMenu } = bdd.controls;
+    const { dial, fader, choice, level, valueButton, readout, tabBar, pad, format } = bdd.controls;
     const STAGE_WIDTH = 1040;
     const STAGE_HEIGHT = 640;
     const parameters = new Map();
@@ -17,11 +17,15 @@
     let filterGraph = null;
     /// The filter as the kernel last set it: { cutoffHz, filterQ, cutoffTopHz, cutoffBottomHz }.
     let filterState = null;
+    let levelControl = null;
     let userPresets = [];
     let factoryPresets = [];
     let currentPreset = null;
     let presetMenu = null;
     let presetDialogMode = null;
+    let userDrawings = [];      // names of the user's own drawings, from the plug-in
+    let drawingMenu = null;
+    let pendingDrawingName = null;   // the drawing a delete dialog is asking about
 
     const DIRECTIONS = ['Forward', 'Backward', 'Pingpong', 'Sine', 'Random', 'Accelerate'];
     const isAccelerate = (value) => Math.round(value) === 5;
@@ -275,8 +279,17 @@
 
     function buildLevel() {
         const control = mountControl(document.getElementById('level-control'), 'outputLevel', level, { label: 'OUT', travel: 400 });   // about the track's length
-        // Deliberately leave control.meter() untouched until the kernel publishes real audio levels.
         if (control) control.element.classList.add('level-control');
+        levelControl = control;
+    }
+
+    /// Where a peak (linear, 1 is 0 dBFS) sits on the meter. The meter shares the LEVEL fader's
+    /// dB range, so a meter's top lines up with the same dB on the fader beside it.
+    function meterHeight(peak) {
+        const range = parameter('outputLevel');
+        if (!range) return 0;
+        const decibels = 20 * Math.log10(Math.max(1e-6, Number(peak) || 0));
+        return (decibels - range.min) / (range.max - range.min);
     }
 
     function buildCutoff() {
@@ -289,6 +302,8 @@
         let group = section(voicePage, 'OSCILLATORS');
         row(group, 'subOctave', choice, { labels: ['−1 OCT', '−2 OCT'] });
         row(group, 'subCrossover', fader, { label: 'SUB CROSSOVER' });
+        // The sub swells and dips with how much of the top the filter lets through.
+        row(group, 'subFollow', fader, { label: 'SUB FOLLOWS TOP' });
 
         group = section(voicePage, 'GLIDE & PITCH');
         detailRows.glide = row(group, 'glideTime', fader, { label: 'GLIDE TIME' });
@@ -296,8 +311,9 @@
         row(group, 'bendRange', fader, { label: 'PITCH BEND RANGE' });
 
         const envelopePage = document.querySelector('[data-page="1"]');
-        group = section(envelopePage, 'ENVELOPE');
-        row(group, 'envRetrigger', choice, { labels: ['OFF', 'ON'] });
+        // Each new note either restarts the drawing (RETRIGGER) or leaves it running (FREE RUN).
+        group = section(envelopePage, 'ON EACH NOTE');
+        row(group, 'envRetrigger', choice, { labels: ['FREE RUN', 'RETRIGGER'], stretch: true });
         group = section(envelopePage, 'ACCELERATE DIRECTION');
         detailRows.accelStart = row(group, 'accelStart', fader, { label: 'START RATE' });
         detailRows.accelEnd = row(group, 'accelEnd', fader, { label: 'END RATE' });
@@ -318,7 +334,7 @@
         });
 
         const tabs = tabBar(['VOICE', 'ENVELOPE', 'FINISH'], {
-            label: 'Detail pages',
+            label: 'Settings pages',
             selected: 0,
             onSelect: showDetailsPage,
         });
@@ -331,6 +347,7 @@
             if (event.key !== 'Escape') return;
             if (!document.getElementById('preset-dialog').hidden) closePresetDialog();
             else if (presetMenu) closePresetMenu();
+            else if (drawingMenu) closeDrawingMenu();
             else if (detailsOpen) closeDetails();
         });
     }
@@ -448,14 +465,20 @@
                 closePresetDialog();
                 return;
             }
+            if (mode === 'deleteDrawing' && pendingDrawingName) {
+                bdd.deleteDrawing(pendingDrawingName);
+                closePresetDialog();
+                return;
+            }
             const name = document.getElementById('preset-name-input').value.trim();
-            if (mode === 'save') {
+            if (mode === 'save' || mode === 'saveDrawing') {
                 if (!name) {
-                    showPresetStatus('Enter a preset name.', true);
+                    showPresetStatus(mode === 'save' ? 'Enter a preset name.' : 'Enter a name for the drawing.', true);
                     document.getElementById('preset-name-input').focus();
                     return;
                 }
-                bdd.savePreset(name);
+                if (mode === 'save') bdd.savePreset(name);
+                else bdd.saveDrawing(name);
             }
             closePresetDialog();
         });
@@ -470,15 +493,33 @@
         bdd.requestPresets();
     }
 
-    function openPresetDialog(mode) {
+    /// The one naming and confirming dialog, for presets and for the user's drawings.
+    /// `mode`: 'save' | 'delete' (presets), 'saveDrawing' | 'deleteDrawing' (with its `name`).
+    function openPresetDialog(mode, name) {
         presetDialogMode = mode;
+        pendingDrawingName = mode === 'deleteDrawing' ? name : null;
+        const kicker = document.getElementById('preset-dialog-kicker');
+        kicker.textContent = (mode === 'saveDrawing' || mode === 'deleteDrawing') ? 'YOUR DRAWING' : 'USER PRESET';
         const dialog = document.getElementById('preset-dialog');
         const title = document.getElementById('preset-dialog-title');
         const message = document.getElementById('preset-dialog-message');
         const label = document.getElementById('preset-name-field');
         const input = document.getElementById('preset-name-input');
         const confirm = document.getElementById('preset-confirm');
-        if (mode === 'delete') {
+        if (mode === 'deleteDrawing') {
+            title.textContent = 'Delete drawing?';
+            message.textContent = `“${name || ''}” will be removed from your drawings. Presets that use it keep their own copy. This cannot be undone.`;
+            label.hidden = true;
+            confirm.textContent = 'DELETE DRAWING';
+            confirm.classList.add('delete');
+        } else if (mode === 'saveDrawing') {
+            title.textContent = 'Save drawing';
+            message.textContent = 'Name this drawing to use it in any patch. Only the drawing is saved, not the other settings.';
+            label.hidden = false;
+            input.value = '';
+            confirm.textContent = 'SAVE DRAWING';
+            confirm.classList.remove('delete');
+        } else if (mode === 'delete') {
             title.textContent = 'Delete preset?';
             message.textContent = `“${currentPreset?.name || ''}” will be removed from your user presets. This cannot be undone.`;
             label.hidden = true;
@@ -493,13 +534,14 @@
             confirm.classList.remove('delete');
         }
         dialog.hidden = false;
-        if (mode === 'save') window.setTimeout(() => input.focus(), 0);
+        if (mode === 'save' || mode === 'saveDrawing') window.setTimeout(() => input.focus(), 0);
     }
 
     function closePresetDialog() {
         document.getElementById('preset-dialog').hidden = true;
         document.getElementById('preset-confirm').classList.remove('delete');
         presetDialogMode = null;
+        pendingDrawingName = null;
     }
 
     function renderPresetState() {
@@ -516,7 +558,20 @@
         if (presetMenu) renderPresetMenuItems();
     }
 
+    /// Places a pop-up list just under `anchor`, kept inside the (scaled) stage.
+    function placeMenu(menu, anchor) {
+        const stage = document.getElementById('stage');
+        const scale = stage.getBoundingClientRect().width / (stage.offsetWidth || 1) || 1;
+        const stageRect = stage.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+        const x = (anchorRect.left - stageRect.left) / scale;
+        const y = (anchorRect.bottom - stageRect.top) / scale + 5;
+        menu.style.left = `${Math.max(8, Math.min(x, stage.offsetWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, stage.offsetHeight - menu.offsetHeight - 8))}px`;
+    }
+
     function openPresetMenu() {
+        if (drawingMenu) closeDrawingMenu();
         const select = document.getElementById('preset-select');
         const stage = document.getElementById('stage');
         presetMenu = document.createElement('div');
@@ -526,13 +581,7 @@
         stage.appendChild(presetMenu);
         select.setAttribute('aria-expanded', 'true');
         renderPresetMenuItems();
-        const scale = stage.getBoundingClientRect().width / (stage.offsetWidth || 1) || 1;
-        const stageRect = stage.getBoundingClientRect();
-        const selectRect = select.getBoundingClientRect();
-        const x = (selectRect.left - stageRect.left) / scale;
-        const y = (selectRect.bottom - stageRect.top) / scale + 5;
-        presetMenu.style.left = `${Math.max(8, Math.min(x, stage.offsetWidth - presetMenu.offsetWidth - 8))}px`;
-        presetMenu.style.top = `${Math.max(8, Math.min(y, stage.offsetHeight - presetMenu.offsetHeight - 8))}px`;
+        placeMenu(presetMenu, select);
     }
 
     function renderPresetMenuItems() {
@@ -581,15 +630,98 @@
         if (message) window.setTimeout(() => { status.hidden = true; }, 3500);
     }
 
-    function buildFactoryMenu() {
+    /// DRAWINGS: the factory drawings, then the user's own (each deletable), then saving the
+    /// current one. Loading any of them changes only the drawing, never the other settings.
+    function buildDrawingsMenu() {
         const button = document.getElementById('drawings');
-        button.addEventListener('click', () => {
-            if (!shapeNames.length) return;
-            openMenu(button, {
-                items: shapeNames.map((name) => String(name).toUpperCase()),
-                onPick: (index) => bdd.loadShape(index),
-            });
+        button.setAttribute('aria-haspopup', 'listbox');
+        button.setAttribute('aria-expanded', 'false');
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            drawingMenu ? closeDrawingMenu() : openDrawingMenu();
         });
+        document.addEventListener('click', (event) => {
+            if (drawingMenu && !event.target.closest('.drawing-menu') && !event.target.closest('#drawings')) closeDrawingMenu();
+        });
+    }
+
+    function openDrawingMenu() {
+        if (presetMenu) closePresetMenu();
+        const button = document.getElementById('drawings');
+        drawingMenu = document.createElement('div');
+        drawingMenu.className = 'preset-menu drawing-menu';
+        drawingMenu.setAttribute('role', 'listbox');
+        drawingMenu.setAttribute('aria-label', 'Drawings');
+        document.getElementById('stage').appendChild(drawingMenu);
+        button.setAttribute('aria-expanded', 'true');
+        renderDrawingMenuItems();
+        placeMenu(drawingMenu, button);
+        bdd.requestDrawings();   // another instance may have saved one since
+    }
+
+    function renderDrawingMenuItems() {
+        if (!drawingMenu) return;
+        drawingMenu.replaceChildren();
+        const addItem = (kind, name, onPick, onDelete) => {
+            const row = document.createElement('div');
+            row.className = 'drawing-menu-row';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'preset-menu-item';
+            button.setAttribute('role', 'option');
+            const tag = document.createElement('span');
+            tag.className = 'preset-kind';
+            tag.textContent = kind;
+            const title = document.createElement('span');
+            title.textContent = name;
+            button.append(tag, title);
+            button.addEventListener('click', () => {
+                closeDrawingMenu();
+                onPick();
+            });
+            row.appendChild(button);
+            if (onDelete) {
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'drawing-delete';
+                remove.textContent = '×';
+                remove.title = 'Delete this drawing';
+                remove.setAttribute('aria-label', `Delete drawing ${name}`);
+                remove.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    closeDrawingMenu();
+                    onDelete();
+                });
+                row.appendChild(remove);
+            }
+            drawingMenu.appendChild(row);
+        };
+        shapeNames.forEach((name, index) => addItem('FACTORY', String(name).toUpperCase(), () => bdd.loadShape(index)));
+        if (userDrawings.length) {
+            for (const name of userDrawings) {
+                addItem('YOURS', name, () => bdd.loadDrawing(name), () => openPresetDialog('deleteDrawing', name));
+            }
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'preset-empty';
+            empty.textContent = 'Drawings you save appear here.';
+            drawingMenu.appendChild(empty);
+        }
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'preset-menu-item drawing-save';
+        save.textContent = 'SAVE CURRENT DRAWING…';
+        save.addEventListener('click', () => {
+            closeDrawingMenu();
+            openPresetDialog('saveDrawing');
+        });
+        drawingMenu.appendChild(save);
+    }
+
+    function closeDrawingMenu() {
+        drawingMenu?.remove();
+        drawingMenu = null;
+        document.getElementById('drawings').setAttribute('aria-expanded', 'false');
     }
 
     const editor = bdd.curveEditor(document.getElementById('curve'), Object.assign(bdd.curveStyles.modern(), {
@@ -624,6 +756,9 @@
         if (incoming.display) {
             filterState = incoming.display;
             editor.setPlayhead(incoming.display.position, incoming.display.value);
+            if (levelControl && incoming.display.meterLeft !== undefined) {
+                levelControl.meter(meterHeight(incoming.display.meterLeft), meterHeight(incoming.display.meterRight));
+            }
             scheduleFilterGraph();
         }
         if (incoming.presetState) {
@@ -632,10 +767,14 @@
             currentPreset = incoming.presetState.currentPreset || null;
             renderPresetState();
         }
+        if (incoming.drawingState) {
+            userDrawings = Array.isArray(incoming.drawingState.drawings) ? incoming.drawingState.drawings : [];
+            renderDrawingMenuItems();
+        }
         if (incoming.status) showPresetStatus(incoming.status.message || '', incoming.status.error === true);
     });
 
-    buildFactoryMenu();
+    buildDrawingsMenu();
     if (!bdd.connected) {
         const badge = document.getElementById('badge');
         badge.hidden = false;

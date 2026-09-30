@@ -63,6 +63,7 @@ struct YoiExtensionMainView: View {
                 section("Oscillators") {
                     ParameterPicker(param: parameterTree.oscillators.subOctave, options: ["-1 Oct", "-2 Oct"])
                     ParameterSlider(param: parameterTree.oscillators.subCrossover, logarithmic: true)
+                    ParameterSlider(param: parameterTree.oscillators.subFollow)
                 }
                 section("Filter") {
                     ParameterPicker(param: parameterTree.filter.filterMode, options: ["LP", "BP"])

@@ -184,6 +184,11 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
          kernel.filterDisplayTopHertz(), kernel.filterDisplayBottomHertz())
     }
 
+    /// The output meters: each channel's held peak after the limiter, linear (1 is 0 dBFS).
+    var outputMeters: (left: Float, right: Float) {
+        (kernel.outputMeterLeft(), kernel.outputMeterRight())
+    }
+
     // MARK: - Drawn envelope
 
     /// Serialises everyone who edits the drawing (the editor, state restore). The kernel accepts

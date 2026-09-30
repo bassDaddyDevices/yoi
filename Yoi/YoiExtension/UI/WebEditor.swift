@@ -15,6 +15,10 @@
 //      endEdit { id }             the gesture ends
 //      setCurve { points }        a new drawing, as [[x, y, bend]]
 //      loadShape { index }        load a factory drawing
+//      drawingList                send the user's drawings
+//      drawingLoad { name }       load one of the user's drawings (only the drawing changes)
+//      drawingSave { name }       save the current drawing under a new name
+//      drawingDelete { name }     delete one of the user's drawings
 //      error { message, source, line }  a script error on the page, for the log
 //      pong { token }             the answer to window.bdd.ping(token): the page is alive
 //
@@ -25,9 +29,11 @@
 //                                 names (sent once, after hello)
 //      params { id: value }       parameter values: all of them after hello, then only changes
 //      curve { points, table }    the drawing's points and the curve as the envelope plays it
+//      drawingState { drawings }  the names of the user's drawings (after hello, and on changes)
 //      display                    about 30 times a second: the envelope's playhead
 //                                 { position, value } and the filter as the kernel set it
-//                                 { cutoffHz, filterQ, cutoffTopHz, cutoffBottomHz }
+//                                 { cutoffHz, filterQ, cutoffTopHz, cutoffBottomHz }, and the
+//                                 output meters' held peaks { meterLeft, meterRight }, linear
 //
 
 import AudioToolbox
@@ -57,6 +63,8 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private var isVisible = false
     /// The ping the page hasn't answered yet, if any.
     private var pendingPing: Int?
+    /// The user's own drawings (kept apart from presets); YOI's folder in the shared library.
+    private let drawingLibrary = DrawingLibrary(product: "YOI")
     private var pingCounter = 0
     /// How long the page has to answer a ping before it's reloaded.
     private static let pingTimeout: TimeInterval = 1.5
@@ -212,6 +220,38 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             audioUnit.loadFactoryShape(index)
             sendCurve()
 
+        case "drawingList":
+            drawingLibrary.reload()
+            sendDrawingState()
+
+        case "drawingLoad":
+            guard let name = body["name"] as? String else { return }
+            drawingLibrary.reload()
+            guard let drawing = drawingLibrary.drawing(named: name) else {
+                sendDrawingState(message: DrawingLibrary.LibraryError.notFound.localizedDescription, error: true)
+                return
+            }
+            audioUnit.envelopeCurve = drawing.points
+            sendCurve()
+
+        case "drawingSave":
+            guard let name = body["name"] as? String else { return }
+            do {
+                let drawing = try drawingLibrary.save(name: name, points: audioUnit.envelopeCurve)
+                sendDrawingState(message: "Saved drawing “\(drawing.name)”.")
+            } catch {
+                sendDrawingState(message: error.localizedDescription, error: true)
+            }
+
+        case "drawingDelete":
+            guard let name = body["name"] as? String else { return }
+            do {
+                try drawingLibrary.delete(name: name)
+                sendDrawingState(message: "Drawing deleted.")
+            } catch {
+                sendDrawingState(message: error.localizedDescription, error: true)
+            }
+
         case "presetList":
             sendPresetState()
 
@@ -322,10 +362,22 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             "params": values,
             "curve": curveState(),
             "presetState": presetState(from: audioUnit),
+            "drawingState": drawingState(),
             // Included so the filter graph has something to draw on the page's first frame.
-            "display": Self.displayPayload(display: display, filter: filter),
+            "display": Self.displayPayload(display: display, filter: filter, meters: audioUnit.outputMeters),
         ])
         sentCurveRevision = audioUnit.curveRevision
+    }
+
+    /// The names of the user's drawings, in the order they were saved.
+    private func drawingState() -> [String: Any] {
+        ["drawings": drawingLibrary.drawings.map(\.name)]
+    }
+
+    private func sendDrawingState(message: String? = nil, error: Bool = false) {
+        var state: [String: Any] = ["drawingState": drawingState()]
+        if let message { state["status"] = ["message": message, "error": error] }
+        send(state)
     }
 
     private func sendPresetState(message: String? = nil, error: Bool = false) {
@@ -379,14 +431,15 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
         let display = audioUnit.envelopeDisplay
         let filter = audioUnit.filterDisplay
-        state["display"] = Self.displayPayload(display: display, filter: filter)
+        state["display"] = Self.displayPayload(display: display, filter: filter, meters: audioUnit.outputMeters)
         send(state)
     }
 
     /// The playhead plus the filter as the kernel last set it. The page draws the filter graph and
     /// the drawing's labels from these; it never works the cutoff relation out itself.
     private static func displayPayload(display: (position: Float, value: Float),
-                                       filter: (cutoffHertz: Float, q: Float, topHertz: Float, bottomHertz: Float)) -> [String: Any] {
+                                       filter: (cutoffHertz: Float, q: Float, topHertz: Float, bottomHertz: Float),
+                                       meters: (left: Float, right: Float)) -> [String: Any] {
         [
             "position": display.position,
             "value": display.value,
@@ -394,6 +447,8 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             "filterQ": filter.q,
             "cutoffTopHz": filter.topHertz,
             "cutoffBottomHz": filter.bottomHertz,
+            "meterLeft": meters.left,
+            "meterRight": meters.right,
         ]
     }
 

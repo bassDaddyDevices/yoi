@@ -175,7 +175,7 @@ void testDefaultsMatchParameterTree() {
     const Expected expected[] = {
         { outputLevel, 0.0f }, { glideTime, 60.0f }, { glideMode, 0.0f }, { bendRange, 2.0f },
         { oscShape, 0.0f }, { subLevel, 75.0f }, { subShape, 0.0f }, { subOctave, 0.0f },
-        { subCrossover, 130.0f }, { filterMode, 0.0f }, { cutoff, 800.0f }, { resonance, 30.0f },
+        { subCrossover, 130.0f }, { subFollow, 0.0f }, { filterMode, 0.0f }, { cutoff, 800.0f }, { resonance, 30.0f },
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 16.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
@@ -217,7 +217,7 @@ void testParametersRoundTrip() {
     const Item items[] = {
         { outputLevel, -12.0f }, { glideTime, 250.0f }, { glideMode, 1.0f }, { bendRange, 12.0f },
         { oscShape, 40.0f }, { subLevel, 75.0f }, { subShape, 60.0f }, { subOctave, 1.0f },
-        { subCrossover, 300.0f }, { filterMode, 1.0f }, { cutoff, 1234.0f }, { resonance, 85.0f },
+        { subCrossover, 300.0f }, { subFollow, 65.0f }, { filterMode, 1.0f }, { cutoff, 1234.0f }, { resonance, 85.0f },
         { ampAttack, 20.0f }, { ampDecay, 900.0f }, { ampSustain, 40.0f }, { ampRelease, 700.0f },
         { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
         { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
@@ -1248,6 +1248,51 @@ void testSubSkipsTheFilter() {
     }
 }
 
+void testSubFollowsTheTop() {
+    // SUB FOLLOW: the sub dips when the drawing closes the filter on the top, and stays put
+    // while the top is at its most open. The Gate drawing is fully open for the first half second
+    // and six octaves down (far below X-OVER, so the top is all but gone) for the second.
+    auto subEnergies = [](float follow, int shape) {
+        auto kernel = makeKernel(kSampleRate, true, false, true);
+        kernel->setParameter(subLevel, 100.0f);
+        kernel->setParameter(subFollow, follow);
+        kernel->setParameter(envTimeMode, 1.0f);
+        kernel->setParameter(envFreeTime, 1000.0f);
+        kernel->setParameter(envRetrigger, 1.0f);
+        kernel->setParameter(envAmount, 6.0f);
+        if (shape < 0) {
+            setFlatDrawing(*kernel, 1.0f);
+        } else {
+            kernel->loadFactoryShape(shape);
+        }
+        render(*kernel, 256);
+        kernel->noteOn(33, 100);   // the sub is at 27.5 Hz
+        const auto output = render(*kernel, frames(1.0));
+        return std::pair{ energyAt(output, size_t(frames(0.2)), size_t(frames(0.45)), 27.5),
+                          energyAt(output, size_t(frames(0.7)), size_t(frames(0.95)), 27.5) };
+    };
+    constexpr int gate = 4;
+    const auto [openOff, closedOff] = subEnergies(0.0f, gate);
+    const auto [openFull, closedFull] = subEnergies(100.0f, gate);
+    const auto [openHalf, closedHalf] = subEnergies(50.0f, gate);
+    const double closedDropOff = 20.0 * std::log10(closedOff / openOff);
+    CHECK(std::fabs(closedDropOff) < 0.5, "with SUB FOLLOW at 0 the drawing shouldn't move the sub, moved it %.1f dB", closedDropOff);
+    const double openChange = 20.0 * std::log10(openFull / openOff);
+    CHECK(std::fabs(openChange) < 0.5, "while the top is most open the sub should keep its level, changed %.1f dB", openChange);
+    const double closedDrop = 20.0 * std::log10(closedFull / openFull);
+    CHECK(closedDrop < -20.0, "at full SUB FOLLOW the sub should drop out with the top, dropped only %.1f dB", closedDrop);
+    const double halfDrop = 20.0 * std::log10(closedHalf / openHalf);
+    CHECK(halfDrop < -4.0 && halfDrop > -8.0, "at half SUB FOLLOW the closed sub should be about half level, was %.1f dB", halfDrop);
+
+    // A top that never moves leaves the sub alone, whatever SUB FOLLOW is.
+    const auto [flatOff, flatOffLate] = subEnergies(0.0f, -1);
+    const auto [flatFull, flatFullLate] = subEnergies(100.0f, -1);
+    const double flatChange = 20.0 * std::log10(flatFullLate / flatOffLate);
+    CHECK(std::fabs(flatChange) < 0.5, "a steady top shouldn't move the sub, changed it %.1f dB", flatChange);
+    (void)flatOff;
+    (void)flatFull;
+}
+
 std::vector<float> playFoldAt(float amount, float position) {
     auto kernel = makeKernel();
     kernel->setParameter(subLevel, 0.0f);
@@ -1551,8 +1596,8 @@ void testMacros() {
     // measured at. With the 1.5-bar default the window would see only part of one pass.
     constexpr float kLoudnessSyncLength = 6.0f;   // 1/8
 
-    // POWER changes density, never loudness: in LUFS, every step stays within 0.25 LU of POWER 0
-    // (measured: within 0.04 LU across six notes, three of them not in the fit).
+    // POWER adds body: saturation, the OTT, and a little loudness. In LUFS it rises steadily with
+    // every step, to about 3 LU at full (measured +3.0 at E1 and A1, +2.4 at A2), never more.
     auto playPower = [](int note, float power) {
         auto k = makeKernel(kSampleRate, true, true, true);
         k->setParameter(envSyncLength, kLoudnessSyncLength);
@@ -1572,11 +1617,16 @@ void testMacros() {
     };
     for (int note : { 33, 28, 45 }) {
         const double base = playPower(note, 0.0f);
-        double worst = 0.0;
+        double previous = base;
+        bool rising = true;
         for (int step = 1; step <= 10; ++step) {
-            worst = std::max(worst, std::fabs(playPower(note, float(step * 10)) - base));
+            const double current = playPower(note, float(step * 10));
+            rising = rising && current > previous;
+            previous = current;
         }
-        CHECK(worst < 0.25, "POWER should keep the loudness (note %d): drifted %.2f LU", note, worst);
+        const double lift = previous - base;
+        CHECK(rising, "POWER should get a little louder at every step (note %d)", note);
+        CHECK(lift > 2.0 && lift < 3.5, "full POWER should be about 3 LU louder (note %d), was %+.2f LU", note, lift);
     }
 
     // The same for VOICE, THROAT, CONTROL and WIDTH, from each one's default position.
@@ -1609,6 +1659,31 @@ void testMacros() {
             CHECK(worst < 0.25, "%s should keep the loudness (note %d): drifted %.2f LU", macro.name, note, worst);
         }
     }
+}
+
+void testOutputMeters() {
+    auto kernel = makeKernel();
+    CHECK(kernel->outputMeterLeft() == 0.0f && kernel->outputMeterRight() == 0.0f, "meters should start empty");
+
+    // While a note plays, each meter holds a peak the output really reached: never above the
+    // loudest sample, never below the last block's.
+    kernel->noteOn(36, 100);
+    const auto playing = render(*kernel, frames(0.5));
+    float loudest = 0.0f;
+    for (float sample : playing) loudest = std::max(loudest, std::fabs(sample));
+    float lastBlock = 0.0f;
+    for (size_t i = playing.size() - 256; i < playing.size(); ++i) lastBlock = std::max(lastBlock, std::fabs(playing[i]));
+    const float meter = kernel->outputMeterLeft();
+    CHECK(meter > 0.0f && meter <= loudest + 1.0e-6f && meter >= lastBlock - 1.0e-6f,
+          "left meter %.4f should be between the last block's peak %.4f and the loudest sample %.4f",
+          meter, lastBlock, loudest);
+    CHECK(kernel->outputMeterRight() > 0.0f, "the right meter should move too");
+
+    // After the note, the meters fall away to nothing (24 dB a second).
+    kernel->noteOff(36);
+    render(*kernel, frames(4.0));
+    CHECK(kernel->outputMeterLeft() < 0.001f && kernel->outputMeterRight() < 0.001f,
+          "meters should fall below -60 dBFS after the note, left %.5f", kernel->outputMeterLeft());
 }
 
 void testWidthIsMonoCompatible() {
@@ -1701,6 +1776,7 @@ int main() {
     testSubCrossover();
     testFoldKeepsTheLevel();
     testSubSkipsTheFilter();
+    testSubFollowsTheTop();
     testPostDownsampleFold();
     testHarmonicBooster();
     testOttEvensOutTheLevel();
@@ -1708,6 +1784,7 @@ int main() {
     testLabExperiments();
     testMacros();
     testWidthIsMonoCompatible();
+    testOutputMeters();
     testFinishExtremesStayBounded();
     testCleanupFilter();
     testGritExtremesStayBounded();

@@ -83,6 +83,20 @@
             post({ type: 'loadShape', index });
         },
 
+        /** The user's own drawings, kept apart from presets: loading one changes only the drawing. */
+        requestDrawings() {
+            post({ type: 'drawingList' });
+        },
+        loadDrawing(name) {
+            post({ type: 'drawingLoad', name });
+        },
+        saveDrawing(name) {
+            post({ type: 'drawingSave', name });
+        },
+        deleteDrawing(name) {
+            post({ type: 'drawingDelete', name });
+        },
+
         /** Preset commands; metadata only, the complete state stays native to the AU host. */
         requestPresets() {
             post({ type: 'presetList' });

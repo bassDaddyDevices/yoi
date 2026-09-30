@@ -114,4 +114,64 @@ struct MultibandCompressor {
     }
 };
 
+/// A gain (0...1) that follows how much of a stage's input gets through it: the loudness of
+/// `followed` against `reference`, relative to the most that has got through lately. Put another
+/// voice through it and that voice swells and dips with the stage, reaching full level wherever
+/// the stage lets the most through, whatever that most is (a band-pass passes far less than a
+/// low-pass, and both should still reach full level).
+///
+/// Both loudnesses are two cascaded one-pole averages of the power, so the gain moves with the
+/// sound's shape and not with its waveform. While the reference is silent the gain rests at 1 and
+/// the peak is left alone. `restart()` clears the loudnesses for a new note but keeps the peak,
+/// so a note that starts closed still dips against the notes before it.
+struct LevelFollow {
+    /// Below this power (about -90 dBFS) the reference counts as silence.
+    static constexpr double kSilence = 1.0e-9;
+
+    std::array<double, 2> referencePower{};
+    std::array<double, 2> followedPower{};
+    double peak = 0.0;
+    double gain = 1.0;
+    double powerCoefficient = 0.001;
+    double gainCoefficient = 0.005;
+    double peakDecay = 0.99999;
+
+    /// `loudnessSeconds` for each averaging stage, `peakSeconds` for the peak to fall by 1/e.
+    void setTimes(double loudnessSeconds, double gainSeconds, double peakSeconds, double sampleRate) {
+        powerCoefficient = 1.0 - std::exp(-1.0 / std::max(1.0, loudnessSeconds * sampleRate));
+        gainCoefficient = 1.0 - std::exp(-1.0 / std::max(1.0, gainSeconds * sampleRate));
+        peakDecay = std::exp(-1.0 / std::max(1.0, peakSeconds * sampleRate));
+    }
+
+    void restart() {
+        referencePower = {};
+        followedPower = {};
+        gain = 1.0;
+    }
+
+    void reset() {
+        restart();
+        peak = 0.0;
+    }
+
+    inline double process(double reference, double followed) {
+        average(referencePower, reference * reference);
+        average(followedPower, followed * followed);
+        double target = 1.0;
+        if (referencePower[1] > kSilence) {
+            const double passed = std::sqrt(followedPower[1] / referencePower[1]);
+            peak = std::max(passed, peak * peakDecay);
+            target = (peak > 0.0) ? passed / peak : 1.0;
+        }
+        gain = flushDenormal(gain + (target - gain) * gainCoefficient);
+        return gain;
+    }
+
+private:
+    inline void average(std::array<double, 2>& power, double input) const {
+        power[0] = flushDenormal(power[0] + (input - power[0]) * powerCoefficient);
+        power[1] = flushDenormal(power[1] + (power[0] - power[1]) * powerCoefficient);
+    }
+};
+
 } // namespace bdd
