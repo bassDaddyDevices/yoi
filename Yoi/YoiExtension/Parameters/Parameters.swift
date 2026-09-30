@@ -240,6 +240,15 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             valueStrings: directionNames
         )
         ParameterSpec(
+            address: .envAccelerate,
+            identifier: "envAccelerate",
+            name: "Env Accelerate",
+            units: .indexed,
+            valueRange: 0...1,
+            defaultValue: 0,
+            valueStrings: ["Off", "On"]
+        )
+        ParameterSpec(
             address: .envRetrigger,
             identifier: "envRetrigger",
             name: "Env Re-Trigger",

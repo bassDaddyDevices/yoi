@@ -179,7 +179,7 @@ void testDefaultsMatchParameterTree() {
         { ampAttack, 3.0f }, { ampDecay, 300.0f }, { ampSustain, 100.0f }, { ampRelease, 150.0f },
         { envAmount, 3.0f }, { envTimeMode, 0.0f }, { envSyncLength, 16.0f }, { envFreeTime, 500.0f },
         { envDirection, 0.0f }, { envRetrigger, 0.0f }, { accelStart, 0.25f }, { accelEnd, 2.0f },
-        { accelCurve, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 70.0f },
+        { accelCurve, 0.0f }, { envAccelerate, 0.0f }, { dsMode, 1.0f }, { dsRate, 1400.0f }, { dsAmount, 70.0f },
         { foldAmount, 0.0f }, { foldPosition, 2.0f }, { cleanupMode, 1.0f }, { cleanupMultiple, 16.0f },
         { boostAmount, 0.0f }, { ottDepth, 0.0f }, { widthAmount, 0.0f }, { ottTime, 50.0f },
         { ottUpward, 100.0f }, { filterMirror, 0.0f }, { filterDrive, 0.0f }, { dsLock, 0.0f }, { macroVoice, 0.0f }, { macroThroat, 100.0f }, { macroPower, 0.0f },
@@ -220,7 +220,7 @@ void testParametersRoundTrip() {
         { subCrossover, 300.0f }, { subFollow, 65.0f }, { filterMode, 1.0f }, { cutoff, 1234.0f }, { resonance, 85.0f },
         { ampAttack, 20.0f }, { ampDecay, 900.0f }, { ampSustain, 40.0f }, { ampRelease, 700.0f },
         { envAmount, 5.5f }, { envTimeMode, 1.0f }, { envSyncLength, 17.0f }, { envFreeTime, 1234.0f },
-        { envDirection, 5.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
+        { envDirection, 4.0f }, { envAccelerate, 1.0f }, { envRetrigger, 1.0f }, { accelStart, 0.5f }, { accelEnd, 3.0f },
         { accelCurve, -0.4f }, { dsMode, 2.0f }, { dsRate, 2500.0f }, { dsAmount, 70.0f },
         { foldAmount, 3.5f }, { foldPosition, 1.0f }, { cleanupMode, 0.0f }, { cleanupMultiple, 7.5f },
         { boostAmount, 40.0f }, { ottDepth, 60.0f }, { widthAmount, 80.0f }, { ottTime, 20.0f },
@@ -556,11 +556,35 @@ void testDirections() {
     }
     CHECK(lowest < 0.1 && highest > 0.9, "random points only cover %f to %f", lowest, highest);
 
-    const bdd::AccelerateSettings steady{ 1.0, 1.0, 0.0 };
-    CHECK(std::fabs(bdd::readPosition(D::accelerate, 0, 0.3, 42, steady) - 0.3) < 1e-12, "accelerate at 1x should read like forward");
+    // Accelerate is a switch on every direction now. Off is a steady read, whatever its rates.
+    CHECK(!defaults.enabled, "Accelerate should start off");
+    const bdd::AccelerateSettings accelerated{ 0.25, 2.0, 0.0, true };
+    auto fast = [&](D direction, double phase, int64_t cycle = 3) {
+        return bdd::readPosition(direction, cycle, phase, 42, accelerated);
+    };
+    const bdd::AccelerateSettings steady{ 1.0, 1.0, 0.0, true };
+    for (D direction : { D::forward, D::backward, D::pingpong, D::sine, D::random }) {
+        CHECK(std::fabs(bdd::readPosition(direction, 3, 0.3, 42, steady) - read(direction, 0.3)) < 1e-12,
+              "accelerate at 1x should read like direction %d unaccelerated", int(direction));
+    }
     CHECK(std::fabs(bdd::accelerateTravel(1.0, defaults) - 1.125) < 1e-12, "0.25x to 2x should travel 1.125 drawings per pass, got %f",
           bdd::accelerateTravel(1.0, defaults));
-    CHECK(std::fabs(read(D::accelerate, 1.0 - 1e-12) - 0.125) < 1e-6, "accelerate should wrap round the drawing");
+    // Forward accelerated is exactly the old Accelerate direction: it wraps round the drawing.
+    CHECK(std::fabs(fast(D::forward, 1.0 - 1e-12) - 0.125) < 1e-6, "accelerated forward should wrap round the drawing");
+    CHECK(std::fabs(fast(D::backward, 0.5) - (1.0 - fast(D::forward, 0.5))) < 1e-12, "accelerated backward should mirror forward");
+    CHECK(fast(D::sine, 0.3) < read(D::sine, 0.3), "accelerated sine should start slower than steady");
+    // Random still glides once a pass, from the last point to the next, never jumping mid-pass.
+    CHECK(std::fabs(fast(D::random, 0.0) - read(D::random, 0.0)) < 1e-12
+          && std::fabs(fast(D::random, 1.0) - read(D::random, 1.0)) < 1e-12, "accelerated random should keep its end points");
+    double previous = fast(D::random, 0.0);
+    const double direction = read(D::random, 1.0) - read(D::random, 0.0);
+    bool monotonic = true;
+    for (int step = 1; step <= 100; ++step) {
+        const double value = fast(D::random, step / 100.0);
+        monotonic = monotonic && (value - previous) * direction >= -1e-12;
+        previous = value;
+    }
+    CHECK(monotonic, "accelerated random should glide without turning back");
     CHECK(bdd::accelerateTravel(0.5, defaults) < bdd::accelerateTravel(1.0, defaults) - bdd::accelerateTravel(0.5, defaults),
           "accelerate should cover less ground in its first half than its second");
     const bdd::AccelerateSettings bent{ 0.25, 2.0, 1.0 };
@@ -575,7 +599,30 @@ void testSyncLengths() {
     CHECK(bdd::syncLengthInQuarterNotes(15, 6, 8) == 3.0, "a bar of 6/8 should be three beats");
     CHECK(bdd::syncLengthInQuarterNotes(6, 3, 4) == 0.5, "note values should not scale with the time signature");
     CHECK(std::string(Kernel::syncLengthName(6)) == "1/8", "sync option 6 is %s", Kernel::syncLengthName(6));
-    CHECK(std::string(Kernel::directionName(5)) == "Accelerate", "direction 5 is %s", Kernel::directionName(5));
+    CHECK(Kernel::directionCount() == 6 && std::string(Kernel::directionName(5)) == "Accelerate",
+          "hosts should still see the old Accelerate direction last, got %s", Kernel::directionName(5));
+}
+
+void testOldAccelerateDirection() {
+    // Sessions saved with the old sixth direction play as Forward with ACCEL on, exactly. The
+    // value reads back as it was set: hosts (and auval) expect a parameter to keep its value.
+    auto play = [](bool legacy) {
+        auto kernel = makeKernel(kSampleRate, true);
+        kernel->setParameter(envTimeMode, 1.0f);
+        kernel->setParameter(envFreeTime, 400.0f);
+        if (legacy) {
+            kernel->setParameter(envDirection, 5.0f);
+        } else {
+            kernel->setParameter(envDirection, 0.0f);
+            kernel->setParameter(envAccelerate, 1.0f);
+        }
+        CHECK(kernel->getParameter(envDirection) == (legacy ? 5.0f : 0.0f)
+              && kernel->getParameter(envAccelerate) == (legacy ? 0.0f : 1.0f),
+              "the old direction should read back exactly as it was set");
+        kernel->noteOn(40, 100);
+        return render(*kernel, frames(1.0));
+    };
+    CHECK(play(true) == play(false), "the old Accelerate direction should sound like Forward with ACCEL on");
 }
 
 // MARK: - Envelope timing
@@ -785,11 +832,14 @@ void testEnvelopeExtremesStayBounded() {
 
     float highest = 0.0f;
     bool finite = true;
-    for (int direction = 0; direction < Kernel::directionCount(); ++direction) {
-        kernel->setParameter(envDirection, float(direction));
-        const auto output = render(*kernel, frames(0.2));
-        highest = std::max(highest, peak(output));
-        finite = finite && allFinite(output);
+    for (float accelerate : { 0.0f, 1.0f }) {
+        for (int direction = 0; direction < Kernel::directionCount(); ++direction) {
+            kernel->setParameter(envAccelerate, accelerate);
+            kernel->setParameter(envDirection, float(direction));
+            const auto output = render(*kernel, frames(0.2));
+            highest = std::max(highest, peak(output));
+            finite = finite && allFinite(output);
+        }
     }
     CHECK(highest <= 1.0f, "fast, deep envelope left full scale: peak %f", highest);
     CHECK(finite, "fast, deep envelope produced a non-finite sample");
@@ -1661,6 +1711,27 @@ void testMacros() {
     }
 }
 
+void testPowerAttackDoesNotSpike() {
+    // The OTT's detector starts each note from silence at a neutral level. It used to start at
+    // zero, and the upward half lifted the first few milliseconds of every note while it caught
+    // up: at full POWER the attack hit full scale, 6 dB over the held note.
+    for (int note : { 28, 33, 45 }) {
+        // The default patch with the drawing held still, so each note starts where it carries on.
+        auto kernel = makeKernel(kSampleRate, false, true, true);
+        kernel->setParameter(macroPower, 100.0f);
+        for (int pass = 0; pass < 3; ++pass) {   // from silence each time
+            kernel->noteOn(note, 100);
+            const auto held = render(*kernel, frames(0.6));
+            kernel->noteOff(note);
+            render(*kernel, frames(0.4));
+            const std::vector<float> attack(held.begin(), held.begin() + frames(0.01));
+            const std::vector<float> body(held.begin() + frames(0.2), held.end());
+            const double over = 20.0 * std::log10(double(peak(attack)) / double(peak(body)));
+            CHECK(over < 1.0, "at full POWER the attack should not jump over the held note (note %d): %+.1f dB", note, over);
+        }
+    }
+}
+
 void testOutputMeters() {
     auto kernel = makeKernel();
     CHECK(kernel->outputMeterLeft() == 0.0f && kernel->outputMeterRight() == 0.0f, "meters should start empty");
@@ -1752,6 +1823,7 @@ int main() {
     testCurveSanitising();
     testDirections();
     testSyncLengths();
+    testOldAccelerateDirection();
     testEnvelopeFollowsHostPosition();
     testEnvelopeRunsAtTempoWhenStopped();
     testFreeTime();
@@ -1784,6 +1856,7 @@ int main() {
     testLabExperiments();
     testMacros();
     testWidthIsMonoCompatible();
+    testPowerAttackDoesNotSpike();
     testOutputMeters();
     testFinishExtremesStayBounded();
     testCleanupFilter();

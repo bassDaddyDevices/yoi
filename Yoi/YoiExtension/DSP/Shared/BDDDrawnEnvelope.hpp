@@ -92,18 +92,19 @@ enum class EnvelopeDirection : int {
     pingpong = 2,
     sine = 3,
     random = 4,
-    accelerate = 5,
 };
 
-inline constexpr int kEnvelopeDirectionCount = 6;
+inline constexpr int kEnvelopeDirectionCount = 5;
 
-/// Settings for the Accelerate direction: playback speed glides from `start` to `end` over each
-/// pass, along `curve` (-1...1, shaped like a curve segment). Speeds are multiples of the TIME
-/// setting, so 1 plays the drawing once per pass.
+/// Accelerate, which works with any direction: playback speed glides from `start` to `end` over
+/// each pass, along `curve` (-1...1, shaped like a curve segment). Speeds are multiples of the
+/// TIME setting, so 1 plays the drawing once per pass. Off (`enabled` false), every direction
+/// reads at a steady speed.
 struct AccelerateSettings {
     double start = 0.25;
     double end = 2.0;
     double curve = 0.0;
+    bool enabled = false;
 };
 
 /// A repeatable random value in 0...1 for one pass of the Random direction.
@@ -129,8 +130,22 @@ inline double accelerateTravel(double phase, const AccelerateSettings& settings)
 }
 
 /// The position (0...1) in the drawing to read for this point in the envelope's cycle.
+///
+/// With Accelerate on, the pass's own progress speeds up first and the direction reads that.
+/// Forward, Backward, Pingpong and Sine wrap round as it passes 1, so a fast end plays them more
+/// than once per pass (Pingpong and Sine meet themselves at the wrap, so they stay smooth). Random
+/// glides once per pass whatever the speeds, just unevenly, so it never jumps back mid-pass.
 inline double readPosition(EnvelopeDirection direction, int64_t cycle, double phase, uint64_t seed,
                            const AccelerateSettings& accelerate) {
+    if (accelerate.enabled) {
+        const double travelled = accelerateTravel(phase, accelerate);
+        if (direction == EnvelopeDirection::random) {
+            const double total = accelerateTravel(1.0, accelerate);
+            phase = (total > 0.0) ? std::clamp(travelled / total, 0.0, 1.0) : phase;
+        } else {
+            phase = travelled - std::floor(travelled);
+        }
+    }
     switch (direction) {
         case EnvelopeDirection::forward:
             return phase;
@@ -145,11 +160,6 @@ inline double readPosition(EnvelopeDirection direction, int64_t cycle, double ph
             const double from = randomPoint(seed, cycle - 1);
             const double to = randomPoint(seed, cycle);
             return from + (to - from) * phase;
-        }
-        case EnvelopeDirection::accelerate: {
-            // Starts each pass from the beginning of the drawing and wraps round it as it speeds up.
-            const double travelled = accelerateTravel(phase, accelerate);
-            return travelled - std::floor(travelled);
         }
     }
     return phase;

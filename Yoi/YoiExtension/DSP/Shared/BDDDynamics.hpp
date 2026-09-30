@@ -33,11 +33,18 @@ struct UpwardDownwardCompressor {
     /// don't swell up; the lift fades in over the 12 dB above it.
     static constexpr double kFloor = -72.0;
 
-    double envelope = 0.0;
+    double envelope = kNeutralLevel;
     double attack = 0.01;
     double release = 0.001;
 
-    void reset() { envelope = 0.0; }
+    /// Where the detector starts: between the two thresholds, where the band is neither lifted nor
+    /// pushed down (-30 dB). Starting it at silence made the first few milliseconds of every note
+    /// pass through while the detector was still climbing out of the lift zone, lifted by up to
+    /// 18 dB x `upward` on top of a signal that was already loud: a spike to full scale on each
+    /// attack at high settings. From here it only acts once it has measured the sound.
+    static constexpr double kNeutralLevel = 0.031622776601683794;
+
+    void reset() { envelope = kNeutralLevel; }
 
     void setTimes(double attackSeconds, double releaseSeconds, double sampleRate) {
         attack = 1.0 - std::exp(-1.0 / std::max(1.0, attackSeconds * sampleRate));

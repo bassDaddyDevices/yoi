@@ -27,8 +27,12 @@
     let drawingMenu = null;
     let pendingDrawingName = null;   // the drawing a delete dialog is asking about
 
-    const DIRECTIONS = ['Forward', 'Backward', 'Pingpong', 'Sine', 'Random', 'Accelerate'];
-    const isAccelerate = (value) => Math.round(value) === 5;
+    // The plug-in also lists the old Accelerate direction (5), for saved sessions, and plays it as
+    // Forward with ACCEL on. The panel offers only these five, shows 5 as FORWARD with ACCEL lit,
+    // and turns it into those two settings the first time either is touched.
+    const DIRECTIONS = ['Forward', 'Backward', 'Pingpong', 'Sine', 'Random'];
+    const LEGACY_ACCELERATE = 5;
+    const isLegacyAccelerate = () => Math.round(Number(values.envDirection ?? 0)) === LEGACY_ACCELERATE;
 
     /// Reads a parameter whose meaning the plug-in owns (OTT TIME's release, say) out of the
     /// readings the descriptor sampled across its range. The mapping stays in the kernel.
@@ -61,8 +65,25 @@
         return control;
     }
 
+    /// A whole gesture on a parameter the user didn't touch directly, shown on the panel at once.
+    function setFromPanel(identifier, value) {
+        const item = parameter(identifier);
+        if (!item) return;
+        bdd.beginEdit(item.id);
+        bdd.edit(item.id, value);
+        bdd.endEdit(item.id);
+        values[identifier] = value;
+        for (const control of controls.get(identifier) || []) control.set(value);
+    }
+
     function onChange(identifier) {
         return (value) => {
+            // Leaving the old Accelerate direction: DIR picked keeps ACCEL on; ACCEL picked sets
+            // DIR to the Forward it was playing.
+            if (isLegacyAccelerate()) {
+                if (identifier === 'envDirection') setFromPanel('envAccelerate', 1);
+                if (identifier === 'envAccelerate') setFromPanel('envDirection', 0);
+            }
             values[identifier] = value;
             for (const control of controls.get(identifier) || []) {
                 if (!control.gesture?.active) control.set(value);
@@ -126,8 +147,9 @@
 
     function buildDrawingControls() {
         const motion = document.getElementById('motion-controls');
-        // Icons, stacked, to leave room for TIME and DIR: a beamed note (sync to the host's tempo)
-        // and a stopwatch (a free time in milliseconds).
+        // The two icon switches side by side at the left, then TIME and DIR in their own group,
+        // centred in the space that's left, under the middle of the drawing.
+        // Time: a beamed note (sync to the host's tempo) and a stopwatch (a free time in milliseconds).
         mountControl(motion, 'envTimeMode', choice, {
             labels: ['Sync to tempo', 'Free time'],
             vertical: true,
@@ -136,17 +158,30 @@
                 '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9.5" r="5"/><path d="M8 9.5V6.8M6.3 1.8h3.4M8 1.8v2.7M12.2 4.6l1-1"/></svg>',
             ],
         });
-        const sync = mountControl(motion, 'envSyncLength', readout, {
+        // ACCEL works with any direction. Evenly spaced ticks (a steady speed) and ticks bunching
+        // up (speeding up).
+        mountControl(motion, 'envAccelerate', choice, {
+            labels: ['Steady speed', 'Accelerate'],
+            vertical: true,
+            icons: [
+                '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8h13M3 5.5v5M8 5.5v5M13 5.5v5"/></svg>',
+                '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8h13M2 5.5v5M8 5.5v5M11.5 5.5v5M13.5 5.5v5"/></svg>',
+            ],
+        });
+        const readouts = document.createElement('div');
+        readouts.className = 'motion-readouts';
+        motion.appendChild(readouts);
+        const sync = mountControl(readouts, 'envSyncLength', readout, {
             label: 'TIME:', scale: 2, menuColumns: 4,
             menuItems: (parameter('envSyncLength')?.options || []).map((name) => name.toUpperCase()),
             format: (value) => (parameter('envSyncLength')?.options || [])[Math.round(value)]?.toUpperCase() || '',
         });
-        const free = mountControl(motion, 'envFreeTime', valueButton, {
+        const free = mountControl(readouts, 'envFreeTime', valueButton, {
             label: 'Envelope time in milliseconds', format: (value) => Math.round(value) + ' ms', travel: 260,
         });
         if (sync) sync.element.id = 'time-sync';
         if (free) free.element.id = 'time-free';
-        mountControl(motion, 'envDirection', readout, {
+        mountControl(readouts, 'envDirection', readout, {
             label: 'DIR:', scale: 2,
             menuItems: DIRECTIONS.map((name) => name.toUpperCase()),
             format: (value) => DIRECTIONS[Math.round(value)]?.toUpperCase() || 'FORWARD',
@@ -314,7 +349,7 @@
         // Each new note either restarts the drawing (RETRIGGER) or leaves it running (FREE RUN).
         group = section(envelopePage, 'ON EACH NOTE');
         row(group, 'envRetrigger', choice, { labels: ['FREE RUN', 'RETRIGGER'], stretch: true });
-        group = section(envelopePage, 'ACCELERATE DIRECTION');
+        group = section(envelopePage, 'ACCELERATE');
         detailRows.accelStart = row(group, 'accelStart', fader, { label: 'START RATE' });
         detailRows.accelEnd = row(group, 'accelEnd', fader, { label: 'END RATE' });
         detailRows.accelCurve = row(group, 'accelCurve', fader, { label: 'RATE CURVE' });
@@ -395,10 +430,13 @@
         if (sync) sync.hidden = free;
         if (freeTime) freeTime.hidden = !free;
 
-        const accelerating = isAccelerate(values.envDirection ?? 0);
+        const accelerating = Number(values.envAccelerate ?? 0) >= 0.5 || isLegacyAccelerate();
+        if (isLegacyAccelerate()) {
+            for (const control of controls.get('envAccelerate') || []) control.set(1);
+        }
         for (const key of ['accelStart', 'accelEnd', 'accelCurve']) {
             const rowInfo = detailRows[key];
-            setReason(rowInfo, !accelerating, 'Used only when Direction is Accelerate.');
+            setReason(rowInfo, !accelerating, 'Used only when ACCEL is on.');
         }
         const foldOff = Number(values.foldAmount ?? 0) <= 0;
         setReason(detailRows.foldPosition, foldOff, 'Choose a fold position after increasing Fold.');
@@ -431,7 +469,11 @@
         parameters.clear();
         byAddress.clear();
         controls.clear();
-        for (const item of descriptor.parameters || []) {
+        for (const descriptorItem of descriptor.parameters || []) {
+            // DIR's controls cover the five directions, never the old sixth.
+            const item = descriptorItem.identifier === 'envDirection'
+                ? Object.assign({}, descriptorItem, { max: DIRECTIONS.length - 1, options: DIRECTIONS })
+                : descriptorItem;
             parameters.set(item.identifier, item);
             byAddress.set(Number(item.id), item.identifier);
         }

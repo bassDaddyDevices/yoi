@@ -56,6 +56,7 @@ typedef NS_ENUM(AUParameterAddress, YoiExtensionParameterAddress) {
     accelStart = 56,
     accelEnd = 57,
     accelCurve = 58,
+    envAccelerate = 59,
 
     dsMode = 70,
     dsRate = 71,
@@ -123,6 +124,7 @@ enum YoiExtensionParameterAddress : AUParameterAddress {
     accelStart = 56,
     accelEnd = 57,
     accelCurve = 58,
+    envAccelerate = 59,
 
     dsMode = 70,
     dsRate = 71,

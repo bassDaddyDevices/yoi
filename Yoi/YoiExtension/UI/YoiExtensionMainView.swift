@@ -37,7 +37,9 @@ struct YoiExtensionMainView: View {
                     ParameterPicker(param: parameterTree.envelope.envTimeMode, options: ["Sync", "Free"])
                     ParameterPicker(param: parameterTree.envelope.envSyncLength, options: syncLengthNames, menu: true)
                     ParameterSlider(param: parameterTree.envelope.envFreeTime, logarithmic: true)
-                    ParameterPicker(param: parameterTree.envelope.envDirection, options: directionNames, menu: true)
+                    // The last name is the old Accelerate direction, kept for saved sessions only.
+                    ParameterPicker(param: parameterTree.envelope.envDirection, options: Array(directionNames.dropLast()), menu: true)
+                    ParameterPicker(param: parameterTree.envelope.envAccelerate, options: ["Off", "On"])
                     ParameterPicker(param: parameterTree.envelope.envRetrigger, options: ["Off", "On"])
                     ParameterSlider(param: parameterTree.envelope.accelStart, logarithmic: true)
                     ParameterSlider(param: parameterTree.envelope.accelEnd, logarithmic: true)

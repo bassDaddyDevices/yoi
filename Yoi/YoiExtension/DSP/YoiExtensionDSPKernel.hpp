@@ -231,7 +231,13 @@ public:
                 mEnvFreeMilliseconds = std::clamp(value, 10.0f, 30000.0f);
                 break;
             case YoiExtensionParameterAddress::envDirection:
-                mEnvDirection = std::clamp(int(std::lround(value)), 0, bdd::kEnvelopeDirectionCount - 1);
+                // Accelerate used to be the sixth direction; it is a switch on every direction now.
+                // The old value is kept as it was set (a parameter must read back what it was given)
+                // and plays as what it always was: Forward, accelerated.
+                mEnvDirection = std::clamp(int(std::lround(value)), 0, kLegacyAccelerateDirection);
+                break;
+            case YoiExtensionParameterAddress::envAccelerate:
+                mEnvAccelerate = std::clamp(int(std::lround(value)), 0, 1);
                 break;
             case YoiExtensionParameterAddress::envRetrigger:
                 mEnvRetrigger = std::clamp(int(std::lround(value)), 0, 1);
@@ -349,6 +355,7 @@ public:
             case YoiExtensionParameterAddress::envSyncLength: return AUValue(mEnvSyncLength);
             case YoiExtensionParameterAddress::envFreeTime: return mEnvFreeMilliseconds;
             case YoiExtensionParameterAddress::envDirection: return AUValue(mEnvDirection);
+            case YoiExtensionParameterAddress::envAccelerate: return AUValue(mEnvAccelerate);
             case YoiExtensionParameterAddress::envRetrigger: return AUValue(mEnvRetrigger);
             case YoiExtensionParameterAddress::accelStart: return mAccelStart;
             case YoiExtensionParameterAddress::accelEnd: return mAccelEnd;
@@ -491,12 +498,16 @@ public:
     static const char* syncLengthName(int index) {
         return bdd::kSyncLengths[size_t(std::clamp(index, 0, syncLengthCount() - 1))].name;
     }
-    static int directionCount() { return bdd::kEnvelopeDirectionCount; }
+    /// The directions hosts see: the five real ones, then the old Accelerate direction, kept so
+    /// saved sessions and automation that chose it still work (it plays as Forward with the
+    /// Accelerate switch on, whatever that switch says). Editors offer only the first five.
+    static constexpr int kLegacyAccelerateDirection = bdd::kEnvelopeDirectionCount;
+    static int directionCount() { return bdd::kEnvelopeDirectionCount + 1; }
     static const char* directionName(int index) {
-        static constexpr const char* names[bdd::kEnvelopeDirectionCount] = {
+        static constexpr const char* names[bdd::kEnvelopeDirectionCount + 1] = {
             "Forward", "Backward", "Pingpong", "Sine", "Random", "Accelerate"
         };
-        return names[std::clamp(index, 0, bdd::kEnvelopeDirectionCount - 1)];
+        return names[std::clamp(index, 0, bdd::kEnvelopeDirectionCount)];
     }
 
     static int factoryShapeCount() {
@@ -667,7 +678,8 @@ public:
         const float cutoffTarget = std::log2(mCutoffHertz);
         const float outputTarget = bdd::decibelsToGain(mOutputDecibels);
         const float filterModeTarget = float(mFilterMode);
-        const auto direction = bdd::EnvelopeDirection(mEnvDirection);
+        const bool legacyAccelerate = (mEnvDirection == kLegacyAccelerateDirection);
+        const auto direction = legacyAccelerate ? bdd::EnvelopeDirection::forward : bdd::EnvelopeDirection(mEnvDirection);
         const float sampleHoldTarget = (mDownsampleMode == downsampleSampleHold) ? 1.0f : 0.0f;
         const float downsampleTarget = (mDownsampleMode == downsampleCount) ? 1.0f : 0.0f;
         const double sampleHoldRate = double(mSampleHoldRate);
@@ -697,6 +709,7 @@ public:
                 double(mAccelStartSmoother.next(mAccelStart)),
                 double(mAccelEndSmoother.next(mAccelEnd)),
                 double(mAccelCurveSmoother.next(mAccelCurve)),
+                mEnvAccelerate != 0 || legacyAccelerate,
             };
 
             // Drawn envelope: where in the drawing, and what it says there.
@@ -1433,6 +1446,7 @@ private:
     float mEnvFreeMilliseconds = 500.0f;
     int mEnvDirection = 0;    // Forward
     int mEnvRetrigger = 0;
+    int mEnvAccelerate = 0;
     float mAccelStart = 0.25f;
     float mAccelEnd = 2.0f;
     float mAccelCurve = 0.0f;

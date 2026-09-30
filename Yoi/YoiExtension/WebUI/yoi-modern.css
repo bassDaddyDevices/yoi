@@ -87,6 +87,7 @@ button { color: inherit; font: inherit; }
 .drawing-controls { display: grid; grid-template-columns: 1fr 150px; align-items: center; gap: 12px; min-height: 62px; }
 .motion-controls { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
 .motion-controls .switch { flex: none; }
+.motion-readouts { display: flex; align-items: center; gap: 10px; margin: 0 auto; min-width: 0; }
 .motion-controls .readout { display: inline-flex; align-items: center; gap: 7px; cursor: ns-resize; }
 .motion-controls .readout-name { color: var(--bdd-faint); font: 700 9px/1 var(--bdd-font); letter-spacing: .08em; }
 .motion-controls .readout-value { color: var(--bdd-ink-soft); }
