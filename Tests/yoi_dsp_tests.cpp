@@ -273,6 +273,84 @@ void testAllNotesOffAndAllSoundOff() {
     CHECK(peak(output) == 0.0f, "all sound off left a peak of %f", peak(output));
 }
 
+void testHostReset() {
+    auto kernel = makeKernel();
+    kernel->noteOn(40, 100);
+    render(*kernel, frames(0.2));
+    kernel->requestReset();   // as the audio unit's reset() does, from another thread
+    const auto output = render(*kernel, frames(0.05));
+    CHECK(peak(output) == 0.0f, "reset left a peak of %f", peak(output));
+    CHECK(!kernel->isSounding(), "voice still sounding after a reset");
+
+    // The key that was down is forgotten, so a new note plays normally.
+    kernel->noteOn(43, 100);
+    const auto again = render(*kernel, frames(0.2));
+    CHECK(peak(again) > 0.01f, "no sound after a reset: peak %f", peak(again));
+}
+
+void testParameterRamps() {
+    auto kernel = makeKernel();
+    CHECK(kernel->getParameter(cutoff) == 800.0f, "cutoff default %f", kernel->getParameter(cutoff));
+    kernel->rampParameter(cutoff, 1600.0f, uint32_t(frames(1.0)));
+    render(*kernel, frames(0.5));
+    // Steps once per 256-frame block: within one block's worth of the line.
+    CHECK(std::fabs(kernel->getParameter(cutoff) - 1200.0f) < 10.0f,
+          "half way through the ramp cutoff is %f", kernel->getParameter(cutoff));
+    render(*kernel, frames(0.6));
+    CHECK(kernel->getParameter(cutoff) == 1600.0f, "ramp ended at %f", kernel->getParameter(cutoff));
+
+    // A new instruction replaces a running ramp.
+    kernel->rampParameter(cutoff, 400.0f, uint32_t(frames(1.0)));
+    render(*kernel, frames(0.25));
+    kernel->rampParameter(cutoff, 500.0f, 0);
+    render(*kernel, frames(1.0));
+    CHECK(kernel->getParameter(cutoff) == 500.0f, "an immediate change did not stop the ramp: %f",
+          kernel->getParameter(cutoff));
+
+    // Macros ramp too, and still write the stages they cover.
+    kernel->rampParameter(macroThroat, 0.0f, uint32_t(frames(0.1)));
+    render(*kernel, frames(0.2));
+    CHECK(kernel->getParameter(macroThroat) == 0.0f, "THROAT ramp ended at %f", kernel->getParameter(macroThroat));
+    CHECK(std::fabs(kernel->getParameter(dsRate) - 6000.0f) < 0.5f, "THROAT ramp left the rate at %f",
+          kernel->getParameter(dsRate));
+
+    // A host reset drops ramps in flight.
+    kernel->rampParameter(cutoff, 2000.0f, uint32_t(frames(1.0)));
+    render(*kernel, frames(0.1));
+    kernel->requestReset();
+    const float atReset = kernel->getParameter(cutoff);
+    render(*kernel, frames(0.5));
+    CHECK(std::fabs(kernel->getParameter(cutoff) - atReset) < 20.0f,
+          "ramp kept running through a reset: %f -> %f", atReset, kernel->getParameter(cutoff));
+}
+
+void testNonFiniteValuesAreIgnored() {
+    auto kernel = makeKernel();
+    const float resonanceBefore = kernel->getParameter(resonance);
+    kernel->setParameter(cutoff, std::nanf(""));
+    kernel->setParameter(outputLevel, INFINITY);
+    kernel->setParameter(resonance, -INFINITY);
+    kernel->rampParameter(oscShape, std::nanf(""), 100);
+    CHECK(kernel->getParameter(cutoff) == 800.0f, "NaN reached cutoff: %f", kernel->getParameter(cutoff));
+    CHECK(kernel->getParameter(outputLevel) == 0.0f, "infinity reached output: %f", kernel->getParameter(outputLevel));
+    CHECK(kernel->getParameter(resonance) == resonanceBefore, "infinity reached resonance: %f", kernel->getParameter(resonance));
+    kernel->noteOn(40, 100);
+    const auto output = render(*kernel, frames(0.3));
+    CHECK(allFinite(output), "non-finite output after non-finite settings");
+    CHECK(peak(output) > 0.01f, "silent after non-finite settings: peak %f", peak(output));
+}
+
+void testTailCoversTheRelease() {
+    auto kernel = makeKernel();
+    kernel->setParameter(ampRelease, 2000.0f);
+    CHECK(kernel->tailSeconds() >= 2.0f, "tail %f s is shorter than the release", kernel->tailSeconds());
+    kernel->noteOn(40, 100);
+    render(*kernel, frames(0.2));
+    kernel->noteOff(40);
+    render(*kernel, frames(double(kernel->tailSeconds())));
+    CHECK(!kernel->isSounding(), "still sounding after the reported tail");
+}
+
 // MARK: - Pitch and note handling
 
 void testPlaysInTune() {
@@ -1861,6 +1939,10 @@ int main() {
     testFinishExtremesStayBounded();
     testCleanupFilter();
     testGritExtremesStayBounded();
+    testHostReset();
+    testParameterRamps();
+    testNonFiniteValuesAreIgnored();
+    testTailCoversTheRelease();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

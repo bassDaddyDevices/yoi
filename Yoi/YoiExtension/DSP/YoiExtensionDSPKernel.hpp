@@ -30,6 +30,7 @@
 #include "YoiExtensionParameterAddresses.h"
 #include "YoiFactoryShapes.hpp"
 #include "Shared/BDDAtomics.hpp"
+#include "Shared/BDDDenormals.hpp"
 #include "Shared/BDDDrawnCurve.hpp"
 #include "Shared/BDDDownsamplers.hpp"
 #include "Shared/BDDDrawnEnvelope.hpp"
@@ -39,6 +40,7 @@
 #include "Shared/BDDMath.hpp"
 #include "Shared/BDDMonoVoice.hpp"
 #include "Shared/BDDOscillators.hpp"
+#include "Shared/BDDParameterRamps.hpp"
 #include "Shared/BDDShapers.hpp"
 #include "Shared/BDDSpatial.hpp"
 
@@ -129,22 +131,9 @@ public:
         mHeldNotes.clear();
         mGlide.jump(60.0);
         mHasPlayed = false;
-        mMainOscillator.reset();
-        mSubOscillator.reset();
-        mFilter.reset();
-        mMirrorFilter.reset();
-        mLockMultiple = 0.0;
-        mSampleAndHold.reset();
-        mSampleCountDownsampler.reset();
-        mWavefolder.reset();
-        mFoldLevel.reset();
-        mCleanupFilter.reset();
-        mMainHighPass.reset();
-        mSubLowPass.reset();
-        mSubFollowLevel.reset();
-        resetFinish();
-        mAppliedCrossoverOctaves = -1.0f;
-        mActiveFoldPosition = mFoldPosition;
+        mRamps.clear();
+        bdd::atomics::storeRelaxed(mResetRequested, 0u);
+        resetSignalPath();
 
         mEnvelopeClock = bdd::EnvelopeClock();
         mCurveFade = 1.0f;
@@ -152,6 +141,13 @@ public:
     }
 
     void deInitialize() {
+    }
+
+    /// Asks the render thread to silence the voice and clear everything that remembers past
+    /// audio, at the start of its next block. Safe from any thread: hosts call an audio unit's
+    /// `reset` on transport stops and jumps and before a bounce, never on the render thread.
+    void requestReset() {
+        bdd::atomics::storeRelaxed(mResetRequested, 1u);
     }
 
     // MARK: - Bypass
@@ -166,6 +162,10 @@ public:
     // MARK: - Parameter Getter / Setter
     // Defaults below must match Parameters.swift, which is what hosts see.
     void setParameter(AUParameterAddress address, AUValue value) {
+        // NaN gets straight through std::clamp, and from there into every filter's state.
+        if (!std::isfinite(value)) {
+            return;
+        }
         switch (address) {
             case YoiExtensionParameterAddress::outputLevel:
                 mOutputDecibels = value;
@@ -382,6 +382,25 @@ public:
             case YoiExtensionParameterAddress::cleanupMultiple: return mCleanupMultiple;
             default: return 0.f;
         }
+    }
+
+    /// Moves a parameter from where it is to `target` over `frames`, as a host's automation ramp
+    /// asks. Render thread only (the AU's ramp events, a VST3 build's automation segments). The
+    /// ramp steps once per block and the parameter's smoother carries it between steps.
+    void rampParameter(AUParameterAddress address, AUValue target, uint32_t frames) {
+        if (!std::isfinite(target)) {
+            return;
+        }
+        if (frames == 0 || !mRamps.start(address, getParameter(address), target, frames)) {
+            mRamps.cancel(address);
+            setParameter(address, target);
+        }
+    }
+
+    /// The longest the output can keep sounding after the last note is released: the amp
+    /// release, plus the OTT's slowest release and the width's delays dying away after it.
+    float tailSeconds() const {
+        return mReleaseMilliseconds * 0.001f + kTailMarginSeconds;
     }
 
     // MARK: - Max Frames
@@ -639,6 +658,16 @@ public:
      sample time of the first frame, which places it against the host's song position.
      */
     void process(std::span<float *> outputBuffers, int64_t bufferStartTime, uint32_t frameCount) {
+        if (outputBuffers.empty()) {
+            return;
+        }
+        const bdd::ScopedFlushDenormals flushDenormals;
+        if (bdd::atomics::exchangeAcquireRelease(mResetRequested, 0u) != 0) {
+            resetVoice();
+        }
+        mRamps.advance(frameCount, [this](AUParameterAddress address, AUValue value) {
+            setParameter(address, value);
+        });
         applyAmpEnvelopeSettings();
         applyOttTime();
         adoptPublishedCurve();
@@ -678,8 +707,9 @@ public:
         const float cutoffTarget = std::log2(mCutoffHertz);
         const float outputTarget = bdd::decibelsToGain(mOutputDecibels);
         const float filterModeTarget = float(mFilterMode);
-        const bool legacyAccelerate = (mEnvDirection == kLegacyAccelerateDirection);
-        const auto direction = legacyAccelerate ? bdd::EnvelopeDirection::forward : bdd::EnvelopeDirection(mEnvDirection);
+        const int envDirection = mEnvDirection;
+        const bool legacyAccelerate = (envDirection == kLegacyAccelerateDirection);
+        const auto direction = legacyAccelerate ? bdd::EnvelopeDirection::forward : bdd::EnvelopeDirection(envDirection);
         const float sampleHoldTarget = (mDownsampleMode == downsampleSampleHold) ? 1.0f : 0.0f;
         const float downsampleTarget = (mDownsampleMode == downsampleCount) ? 1.0f : 0.0f;
         const double sampleHoldRate = double(mSampleHoldRate);
@@ -694,6 +724,8 @@ public:
         float drawing = 0.0f;
         float peakLeft = 0.0f;    // for the output meters, after the limiter
         float peakRight = 0.0f;
+        // Checked on every sample, not on the peaks: std::max(peak, NaN) quietly drops the NaN.
+        bool nonFinite = false;
 
         for (uint32_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
             const float mainMorph = mOscShapeSmoother.next(mOscShape);
@@ -879,9 +911,11 @@ public:
             const double level = double(outputGain) * std::exp2(kPowerLiftDecibels * powerAmount / 6.020599913);
             const float left = bdd::softLimit(float((stereo.left + subVoice) * level));
             const float right = bdd::softLimit(float((stereo.right + subVoice) * level));
+            nonFinite |= !std::isfinite(left + right);
 
             if (outputBuffers.size() == 1) {
                 const float mono = bdd::softLimit(float((compressed + subVoice) * level));
+                nonFinite |= !std::isfinite(mono);
                 outputBuffers[0][frameIndex] = mono;
                 peakLeft = std::max(peakLeft, std::fabs(mono));
                 peakRight = peakLeft;
@@ -896,6 +930,18 @@ public:
             }
         }
 
+        if (nonFinite) {
+            // A safety net: nothing known produces this. A NaN would otherwise live on in the
+            // filters' and compressor's state, across notes, until the plug-in was reloaded. So
+            // this block goes out silent and every stage starts clean; the note carries on.
+            for (auto* buffer : outputBuffers) {
+                std::fill_n(buffer, frameCount, 0.f);
+            }
+            resetSignalPath();
+            snapSmoothers();
+            peakLeft = peakRight = 0.0f;
+        }
+
         bdd::atomics::storeRelaxed(mDisplayPositionBits, std::bit_cast<uint32_t>(float(drawingPosition)));
         bdd::atomics::storeRelaxed(mDisplayValueBits, std::bit_cast<uint32_t>(drawing));
         storeFilterDisplayFromSmoothers(double(drawing));
@@ -907,6 +953,14 @@ public:
         switch (event->head.eventType) {
             case AURenderEventParameter: {
                 handleParameterEvent(now, event->parameter);
+                break;
+            }
+
+            case AURenderEventParameterRamp: {
+                // Hosts write ramped automation this way (Logic's ramped lanes). The event's value
+                // is where the ramp ends; it starts from wherever the parameter is now.
+                const auto& ramp = event->parameter;
+                rampParameter(ramp.parameterAddress, ramp.value, ramp.rampDurationSampleFrames);
                 break;
             }
 
@@ -929,6 +983,8 @@ public:
 
     void handleParameterEvent(AUEventSampleTime now, AUParameterEvent const& parameterEvent) {
         (void)now;
+        // The newest instruction wins: a plain change stops any ramp on that parameter.
+        mRamps.cancel(parameterEvent.parameterAddress);
         setParameter(parameterEvent.parameterAddress, parameterEvent.value);
     }
 
@@ -1051,6 +1107,9 @@ private:
     static constexpr double kModeCrossfadeSeconds = 0.015;
     /// A redrawn envelope fades in over this long, so editing it while it plays never clicks.
     static constexpr double kCurveCrossfadeSeconds = 0.02;
+    /// What can still sound once the amp release has finished: the OTT letting go at its slowest
+    /// (400 ms at OTT TIME 100 %) and the width's 11-17 ms delays, with room to spare.
+    static constexpr float kTailMarginSeconds = 0.5f;
     /// Scales the oscillator mix so that the default sound peaks around -7 dBFS (about -15 dBFS
     /// RMS). That leaves room for resonance, which can add 10 dB or more at a harmonic, before
     /// the limiter's knee at -4.4 dBFS, so the limiter only catches genuinely extreme settings.
@@ -1302,24 +1361,59 @@ private:
         mDimension.reset();
     }
 
+    /// Clears every stage that remembers past audio, from the oscillators to the width, so the
+    /// next sample starts from rest. Leaves the notes, the envelopes and the settings alone.
+    void resetSignalPath() {
+        mMainOscillator.reset();
+        mSubOscillator.reset();
+        mFilter.reset();
+        mMirrorFilter.reset();
+        mLockMultiple = 0.0;
+        mSampleAndHold.reset();
+        mSampleCountDownsampler.reset();
+        mWavefolder.reset();
+        mFoldLevel.reset();
+        mCleanupFilter.reset();
+        mMainHighPass.reset();
+        mSubLowPass.reset();
+        mSubFollowLevel.reset();
+        resetFinish();
+        mAppliedCrossoverOctaves = -1.0f;   // recalculated at the next sample
+        mActiveFoldPosition = mFoldPosition;
+    }
+
+    /// The host's reset: silence now, no keys held, no ramps running, and nothing left of the
+    /// last sound in any stage. Render thread only (see `requestReset`).
+    void resetVoice() {
+        mHeldNotes.clear();
+        mAmpEnvelope.reset();
+        mRamps.clear();
+        resetSignalPath();
+    }
+
     /// Recalculates amp envelope coefficients when their settings have changed. Runs on the
     /// render thread, once per block, so the envelope never sees a half-written update.
     void applyAmpEnvelopeSettings() {
-        if (mAttackMilliseconds != mAppliedAttack) {
-            mAppliedAttack = mAttackMilliseconds;
-            mAmpEnvelope.setAttack(double(mAttackMilliseconds) * 0.001);
+        // Each setting is read once, so what is applied is exactly what is remembered as applied.
+        const float attack = mAttackMilliseconds;
+        const float sustain = mSustain;
+        const float decay = mDecayMilliseconds;
+        const float release = mReleaseMilliseconds;
+        if (attack != mAppliedAttack) {
+            mAppliedAttack = attack;
+            mAmpEnvelope.setAttack(double(attack) * 0.001);
         }
-        if (mSustain != mAppliedSustain) {
-            mAppliedSustain = mSustain;
-            mAmpEnvelope.setSustain(double(mSustain));
+        if (sustain != mAppliedSustain) {
+            mAppliedSustain = sustain;
+            mAmpEnvelope.setSustain(double(sustain));
         }
-        if (mDecayMilliseconds != mAppliedDecay) {
-            mAppliedDecay = mDecayMilliseconds;
-            mAmpEnvelope.setDecay(double(mDecayMilliseconds) * 0.001);
+        if (decay != mAppliedDecay) {
+            mAppliedDecay = decay;
+            mAmpEnvelope.setDecay(double(decay) * 0.001);
         }
-        if (mReleaseMilliseconds != mAppliedRelease) {
-            mAppliedRelease = mReleaseMilliseconds;
-            mAmpEnvelope.setRelease(double(mReleaseMilliseconds) * 0.001);
+        if (release != mAppliedRelease) {
+            mAppliedRelease = release;
+            mAmpEnvelope.setRelease(double(release) * 0.001);
         }
     }
 
@@ -1333,9 +1427,10 @@ private:
     /// Recalculates the OTT's attack and release when OTT TIME has changed. Runs on the render
     /// thread, once per block. Times change how the detector moves, not the gain, so no smoothing.
     void applyOttTime() {
-        if (mOttTime != mAppliedOttTime) {
-            mAppliedOttTime = mOttTime;
-            mOtt.setTimeScale(ottTimeScale(mOttTime), mSampleRate);
+        const float ottTime = mOttTime;
+        if (ottTime != mAppliedOttTime) {
+            mAppliedOttTime = ottTime;
+            mOtt.setTimeScale(ottTimeScale(ottTime), mSampleRate);
         }
     }
 
@@ -1419,61 +1514,66 @@ private:
 #endif
 
     double mSampleRate = 44100.0;
-    bool mBypassed = false;
-    uint32_t mMaxFramesToRender = 1024;
+    bdd::Relaxed<bool> mBypassed = false;
+    bdd::Relaxed<uint32_t> mMaxFramesToRender = 1024u;
 
-    // Parameter targets, in the kernel's own units (fractions rather than percent).
-    float mOutputDecibels = 0.0f;
-    float mGlideMilliseconds = 60.0f;
-    int mGlideMode = glideLegato;
-    float mBendRange = 2.0f;
-    float mOscShape = 0.0f;
-    float mSubLevel = 0.75f;   // with the crossover the sub carries the low end alone; 75 % keeps the defaults at -7 dBFS
-    float mSubShape = 0.0f;
-    int mSubOctave = 0;
-    float mSubCrossoverHertz = 130.0f;
-    float mSubFollow = 0.0f;
-    int mFilterMode = 0;
-    float mCutoffHertz = 800.0f;
-    float mResonance = 0.3f;
-    float mAttackMilliseconds = 3.0f;
-    float mDecayMilliseconds = 300.0f;
-    float mSustain = 1.0f;
-    float mReleaseMilliseconds = 150.0f;
-    float mEnvAmount = 3.0f;
-    int mEnvTimeMode = envelopeSync;
-    int mEnvSyncLength = 16;   // 1.5 bars
-    float mEnvFreeMilliseconds = 500.0f;
-    int mEnvDirection = 0;    // Forward
-    int mEnvRetrigger = 0;
-    int mEnvAccelerate = 0;
-    float mAccelStart = 0.25f;
-    float mAccelEnd = 2.0f;
-    float mAccelCurve = 0.0f;
-    int mDownsampleMode = downsampleSampleHold;
-    float mSampleHoldRate = 1400.0f;
-    float mDownsampleAmount = 70.0f;   // where THROAT's default (the full throat) puts it
+    // Parameter targets, in the kernel's own units (fractions rather than percent). The host,
+    // the UI and the render thread all set them, so each is a relaxed atomic (bdd::Relaxed).
+    bdd::Relaxed<float> mOutputDecibels = 0.0f;
+    bdd::Relaxed<float> mGlideMilliseconds = 60.0f;
+    bdd::Relaxed<int> mGlideMode = int(glideLegato);
+    bdd::Relaxed<float> mBendRange = 2.0f;
+    bdd::Relaxed<float> mOscShape = 0.0f;
+    bdd::Relaxed<float> mSubLevel = 0.75f;   // with the crossover the sub carries the low end alone; 75 % keeps the defaults at -7 dBFS
+    bdd::Relaxed<float> mSubShape = 0.0f;
+    bdd::Relaxed<int> mSubOctave = 0;
+    bdd::Relaxed<float> mSubCrossoverHertz = 130.0f;
+    bdd::Relaxed<float> mSubFollow = 0.0f;
+    bdd::Relaxed<int> mFilterMode = 0;
+    bdd::Relaxed<float> mCutoffHertz = 800.0f;
+    bdd::Relaxed<float> mResonance = 0.3f;
+    bdd::Relaxed<float> mAttackMilliseconds = 3.0f;
+    bdd::Relaxed<float> mDecayMilliseconds = 300.0f;
+    bdd::Relaxed<float> mSustain = 1.0f;
+    bdd::Relaxed<float> mReleaseMilliseconds = 150.0f;
+    bdd::Relaxed<float> mEnvAmount = 3.0f;
+    bdd::Relaxed<int> mEnvTimeMode = int(envelopeSync);
+    bdd::Relaxed<int> mEnvSyncLength = 16;   // 1.5 bars
+    bdd::Relaxed<float> mEnvFreeMilliseconds = 500.0f;
+    bdd::Relaxed<int> mEnvDirection = 0;    // Forward
+    bdd::Relaxed<int> mEnvRetrigger = 0;
+    bdd::Relaxed<int> mEnvAccelerate = 0;
+    bdd::Relaxed<float> mAccelStart = 0.25f;
+    bdd::Relaxed<float> mAccelEnd = 2.0f;
+    bdd::Relaxed<float> mAccelCurve = 0.0f;
+    bdd::Relaxed<int> mDownsampleMode = int(downsampleSampleHold);
+    bdd::Relaxed<float> mSampleHoldRate = 1400.0f;
+    bdd::Relaxed<float> mDownsampleAmount = 70.0f;   // where THROAT's default (the full throat) puts it
     static constexpr float kFoldMaximum = 0.05f;
-    float mFoldAmount = 0.0f;
-    int mFoldPosition = foldPostDownsample;
-    int mActiveFoldPosition = foldPostDownsample;
-    int mCleanupMode = 1;
-    float mCleanupMultiple = 16.0f;   // where CONTROL's default (raw) puts it
-    float mBoostAmount = 0.0f;
-    float mOttDepth = 0.0f;
-    float mWidthAmount = 0.0f;
-    float mOttTime = 50.0f;
-    float mOttUpward = 1.0f;
-    float mAppliedOttTime = -1.0f;
-    float mMirrorLevel = 0.0f;
-    float mFilterDrive = 0.0f;
-    float mLockAmount = 0.0f;
-    double mLockMultiple = 0.0;
-    float mVoice = 0.0f;
-    float mThroat = 1.0f;     // the full throat: S&H at 1.4 kHz, as YOI has always started
-    float mPower = 0.0f;
-    float mControl = 0.0f;
-    float mWidth = 0.0f;
+    bdd::Relaxed<float> mFoldAmount = 0.0f;
+    bdd::Relaxed<int> mFoldPosition = int(foldPostDownsample);
+    int mActiveFoldPosition = foldPostDownsample;   // render thread only
+    bdd::Relaxed<int> mCleanupMode = 1;
+    bdd::Relaxed<float> mCleanupMultiple = 16.0f;   // where CONTROL's default (raw) puts it
+    bdd::Relaxed<float> mBoostAmount = 0.0f;
+    bdd::Relaxed<float> mOttDepth = 0.0f;
+    bdd::Relaxed<float> mWidthAmount = 0.0f;
+    bdd::Relaxed<float> mOttTime = 50.0f;
+    bdd::Relaxed<float> mOttUpward = 1.0f;
+    float mAppliedOttTime = -1.0f;   // render thread only
+    bdd::Relaxed<float> mMirrorLevel = 0.0f;
+    bdd::Relaxed<float> mFilterDrive = 0.0f;
+    bdd::Relaxed<float> mLockAmount = 0.0f;
+    double mLockMultiple = 0.0;   // render thread only
+    bdd::Relaxed<float> mVoice = 0.0f;
+    bdd::Relaxed<float> mThroat = 1.0f;     // the full throat: S&H at 1.4 kHz, as YOI has always started
+    bdd::Relaxed<float> mPower = 0.0f;
+    bdd::Relaxed<float> mControl = 0.0f;
+    bdd::Relaxed<float> mWidth = 0.0f;
+
+    // Host automation ramps (render thread only), and a reset asked for from another thread.
+    bdd::ParameterRamps<AUParameterAddress> mRamps;
+    uint32_t mResetRequested = 0;
 
     float mBendPosition = 0.0f;
 

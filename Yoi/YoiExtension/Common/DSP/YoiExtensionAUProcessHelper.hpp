@@ -10,6 +10,8 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <AVFoundation/AVFoundation.h>
 
+#include <algorithm>
+#include <span>
 #include <vector>
 #include "YoiExtensionDSPKernel.hpp"
 
@@ -22,9 +24,13 @@ public:
     {
     }
     
-    void setChannelCount(UInt32 inputChannelCount, UInt32 outputChannelCount)
+    /// Call from allocateRenderResources, with the output bus's channel count and the most frames
+    /// the host may ask for. This is where the memory for hosts that pass no buffers is made.
+    void setChannelCount(UInt32 inputChannelCount, UInt32 outputChannelCount, AUAudioFrameCount maximumFrames)
     {
+        (void)inputChannelCount;
         mOutputBuffers.resize(outputChannelCount);
+        mScratchBuffers.assign(outputChannelCount, std::vector<float>(maximumFrames, 0.0f));
     }
 
     /**
@@ -32,20 +38,33 @@ public:
      Call it inside your internalRenderBlock.
      */
     void processWithEvents(AudioBufferList* outBufferList, AudioTimeStamp const *timestamp, AUAudioFrameCount frameCount, AURenderEvent const *events) {
-        
+
         AUEventSampleTime now = AUEventSampleTime(timestamp->mSampleTime);
         AUAudioFrameCount framesRemaining = frameCount;
 
         // Tempo, song position and transport, once per cycle, before any of its events or audio.
         mKernel.beginRenderCycle(now);
         AURenderEvent const *nextEvent = events; // events is a linked list, at the beginning, the nextEvent is the first event
-        
-        auto callProcess = [this] (AudioBufferList* outBufferListPtr, AUEventSampleTime now, AUAudioFrameCount frameCount, AUAudioFrameCount const frameOffset) {
-            for (int channel = 0; channel < mOutputBuffers.size(); ++channel) {
-                mOutputBuffers[channel] = (float*)outBufferListPtr->mBuffers[channel].mData + frameOffset;
+
+        // Render into as many channels as both the bus format and the host's buffer list have.
+        // A buffer the host left without memory (allowed: it then expects the audio unit's own)
+        // gets the scratch made in setChannelCount.
+        const size_t channelCount = std::min<size_t>(outBufferList->mNumberBuffers, mOutputBuffers.size());
+        for (size_t channel = 0; channel < channelCount; ++channel) {
+            AudioBuffer& buffer = outBufferList->mBuffers[channel];
+            if (buffer.mData == nullptr) {
+                buffer.mData = mScratchBuffers[channel].data();
+                buffer.mDataByteSize = UInt32(frameCount * sizeof(float));
             }
-            
-            mKernel.process(mOutputBuffers, now, frameCount);
+        }
+        const std::span<float*> outputs(mOutputBuffers.data(), channelCount);
+
+        auto callProcess = [this, outputs] (AudioBufferList* outBufferListPtr, AUEventSampleTime now, AUAudioFrameCount frameCount, AUAudioFrameCount const frameOffset) {
+            for (size_t channel = 0; channel < outputs.size(); ++channel) {
+                outputs[channel] = (float*)outBufferListPtr->mBuffers[channel].mData + frameOffset;
+            }
+
+            mKernel.process(outputs, now, frameCount);
         };
         
         while (framesRemaining > 0) {
@@ -130,4 +149,5 @@ public:
 private:
     YoiExtensionDSPKernel& mKernel;
     std::vector<float*> mOutputBuffers;
+    std::vector<std::vector<float>> mScratchBuffers;
 };

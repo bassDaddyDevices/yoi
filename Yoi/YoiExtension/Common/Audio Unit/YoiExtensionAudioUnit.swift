@@ -9,9 +9,12 @@ import AVFoundation
 
 public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 {
-	// C++ Objects
-	var kernel = YoiExtensionDSPKernel()
-    var processHelper: AUProcessHelper?
+	// C++ objects. Both live on the heap, allocated once, so their addresses never move: the
+	// helper keeps a reference to the kernel and the render block keeps the helper's `this`.
+	// Reaching them through pointers also keeps Swift's exclusivity rules for a stored value out
+	// of calls that come from several threads at once (the host, the UI, the render thread).
+	let kernel: UnsafeMutablePointer<YoiExtensionDSPKernel>
+    private let processHelper: UnsafeMutablePointer<AUProcessHelper>
 
 	private var outputBus: AUAudioUnitBus?
 	private var _outputBusses: AUAudioUnitBusArray!
@@ -20,12 +23,23 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	@objc override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions) throws {
 		self.format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        kernel = UnsafeMutablePointer<YoiExtensionDSPKernel>.allocate(capacity: 1)
+        kernel.initialize(to: YoiExtensionDSPKernel())
+        processHelper = UnsafeMutablePointer<AUProcessHelper>.allocate(capacity: 1)
+        processHelper.initialize(to: AUProcessHelper(&kernel.pointee))
 		try super.init(componentDescription: componentDescription, options: options)
 		outputBus = try AUAudioUnitBus(format: self.format)
         outputBus?.maximumChannelCount = 2
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: AUAudioUnitBusType.output, busses: [outputBus!])
-        processHelper = AUProcessHelper(&kernel)
 	}
+
+    deinit {
+        // The helper refers to the kernel, so it goes first.
+        processHelper.deinitialize(count: 1)
+        processHelper.deallocate()
+        kernel.deinitialize(count: 1)
+        kernel.deallocate()
+    }
 
 	public override var outputBusses: AUAudioUnitBusArray {
 		return _outputBusses
@@ -38,32 +52,45 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     
     public override var  maximumFramesToRender: AUAudioFrameCount {
         get {
-            return kernel.maximumFramesToRender()
+            return kernel.pointee.maximumFramesToRender()
         }
 
         set {
-            kernel.setMaximumFramesToRender(newValue)
+            kernel.pointee.setMaximumFramesToRender(newValue)
         }
     }
 
     public override var  shouldBypassEffect: Bool {
         get {
-            return kernel.isBypassed()
+            return kernel.pointee.isBypassed()
         }
 
         set {
-            kernel.setBypass(newValue)
+            kernel.pointee.setBypass(newValue)
         }
     }
 
     // MARK: - MIDI
     public override var audioUnitMIDIProtocol: MIDIProtocolID {
-        return kernel.AudioUnitMIDIProtocol()
+        return kernel.pointee.AudioUnitMIDIProtocol()
     }
 
     // MARK: - Rendering
     public override var internalRenderBlock: AUInternalRenderBlock {
-        return processHelper!.internalRenderBlock()
+        return processHelper.pointee.internalRenderBlock()
+    }
+
+    /// Hosts call this on transport stops and jumps and before a bounce. The render thread does the
+    /// silencing at its next block, so nothing it is using changes under it.
+    public override func reset() {
+        super.reset()
+        kernel.pointee.requestReset()
+    }
+
+    /// How long the sound can carry on after the last note ends, so hosts that stop pulling at the
+    /// end of a region (offline bounces) don't cut the release. It follows the Release setting.
+    public override var tailTime: TimeInterval {
+        TimeInterval(kernel.pointee.tailSeconds())
     }
 
     // Allocate resources required to render.
@@ -73,10 +100,10 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		
 		// The kernel takes the host's tempo and transport blocks itself and keeps them alive;
 		// passing them from Swift would hand it temporaries that are freed straight away.
-		kernel.captureHostBlocks(self)
-		kernel.initialize(Int32(outputChannelCount), outputBus!.format.sampleRate)
+		kernel.pointee.captureHostBlocks(self)
+		kernel.pointee.initialize(Int32(outputChannelCount), outputBus!.format.sampleRate)
 
-        processHelper?.setChannelCount(0, self.outputBusses[0].format.channelCount)
+        processHelper.pointee.setChannelCount(0, outputChannelCount, maximumFramesToRender)
 
 		try super.allocateRenderResources()
 	}
@@ -86,8 +113,8 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     public override func deallocateRenderResources() {
         
         // Deallocate your resources.
-        kernel.releaseHostBlocks()
-        kernel.deInitialize()
+        kernel.pointee.releaseHostBlocks()
+        kernel.pointee.deInitialize()
         
         super.deallocateRenderResources()
     }
@@ -97,7 +124,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		// Set the Parameter default values before setting up the parameter callbacks
 		for param in parameterTree.allParameters {
-            kernel.setParameter(param.address, param.value)
+            kernel.pointee.setParameter(param.address, param.value)
 		}
 
 		setupParameterCallbacks()
@@ -107,12 +134,13 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private func setupParameterCallbacks() {
 		// implementorValueObserver is called when a parameter changes value.
 		parameterTree?.implementorValueObserver = { [weak self] param, value -> Void in
-            self?.kernel.setParameter(param.address, value)
+            self?.kernel.pointee.setParameter(param.address, value)
 		}
 
 		// implementorValueProvider is called when the value needs to be refreshed.
 		parameterTree?.implementorValueProvider = { [weak self] param in
-            return self!.kernel.getParameter(param.address)
+            // The tree can outlive the audio unit (a host or KVO still holding it).
+            return self?.kernel.pointee.getParameter(param.address) ?? param.value
 		}
 
 		// A function to provide string representations of parameter values.
@@ -180,13 +208,13 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     /// its Q, and the two ends of the range the drawing sweeps. Editors draw these instead of
     /// re-deriving the cutoff relation or the RES remap.
     var filterDisplay: (cutoffHertz: Float, q: Float, topHertz: Float, bottomHertz: Float) {
-        (kernel.filterDisplayCutoffHertz(), kernel.filterDisplayQ(),
-         kernel.filterDisplayTopHertz(), kernel.filterDisplayBottomHertz())
+        (kernel.pointee.filterDisplayCutoffHertz(), kernel.pointee.filterDisplayQ(),
+         kernel.pointee.filterDisplayTopHertz(), kernel.pointee.filterDisplayBottomHertz())
     }
 
     /// The output meters: each channel's held peak after the limiter, linear (1 is 0 dBFS).
     var outputMeters: (left: Float, right: Float) {
-        (kernel.outputMeterLeft(), kernel.outputMeterRight())
+        (kernel.pointee.outputMeterLeft(), kernel.pointee.outputMeterRight())
     }
 
     // MARK: - Drawn envelope
@@ -206,7 +234,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
     func loadFactoryShape(_ index: Int) {
         curveLock.lock()
         defer { curveLock.unlock() }
-        kernel.loadFactoryShape(Int32(index))
+        kernel.pointee.loadFactoryShape(Int32(index))
         curveRevision &+= 1
     }
 
@@ -221,14 +249,14 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         curveLock.lock()
         defer { curveLock.unlock() }
         table.withUnsafeMutableBufferPointer { buffer in
-            kernel.copyEnvelopeTable(buffer.baseAddress, Int32(buffer.count))
+            kernel.pointee.copyEnvelopeTable(buffer.baseAddress, Int32(buffer.count))
         }
         return table
     }
 
     /// Where the envelope is reading in the drawing (0...1) and what it read, for a playhead.
     var envelopeDisplay: (position: Float, value: Float) {
-        (kernel.envelopeDisplayPosition(), kernel.envelopeDisplayValue())
+        (kernel.pointee.envelopeDisplayPosition(), kernel.pointee.envelopeDisplayValue())
     }
 
     /// The drawing as points of `[x, y, bend]`: x and y are 0...1, bend is -1...1. Setting it
@@ -237,9 +265,9 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         get {
             curveLock.lock()
             defer { curveLock.unlock() }
-            return (0..<Int(kernel.envelopePointCount())).map { index in
+            return (0..<Int(kernel.pointee.envelopePointCount())).map { index in
                 let i = Int32(index)
-                return [kernel.envelopePointX(i), kernel.envelopePointY(i), kernel.envelopePointBend(i)]
+                return [kernel.pointee.envelopePointX(i), kernel.pointee.envelopePointY(i), kernel.pointee.envelopePointBend(i)]
             }
         }
         set {
@@ -248,7 +276,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             let bends = newValue.map { $0.count > 2 ? $0[2] : 0 }
             curveLock.lock()
             defer { curveLock.unlock() }
-            kernel.setEnvelopeCurve(xs, ys, bends, Int32(newValue.count))
+            kernel.pointee.setEnvelopeCurve(xs, ys, bends, Int32(newValue.count))
             curveRevision &+= 1
         }
     }
