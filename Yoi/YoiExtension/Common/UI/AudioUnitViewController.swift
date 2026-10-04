@@ -26,6 +26,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var observation: NSKeyValueObservation?
 
 	deinit {
+        observation?.invalidate()
         let editor = webEditor
         Task { @MainActor in
             editor?.invalidate()
@@ -54,41 +55,50 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
     
 	nonisolated public func createAudioUnit(with componentDescription: AudioComponentDescription) throws -> AUAudioUnit {
+		if Thread.isMainThread {
+			return try MainActor.assumeIsolated {
+				try self.makeAudioUnit(componentDescription)
+			}
+		}
 		return try DispatchQueue.main.sync {
-			
-			audioUnit = try YoiExtensionAudioUnit(componentDescription: componentDescription, options: [])
-			
-			guard let audioUnit = self.audioUnit as? YoiExtensionAudioUnit else {
-				log.error("Unable to create YoiExtensionAudioUnit")
-				return audioUnit!
-			}
-			
-			defer {
-				// Configure the SwiftUI view after creating the AU, instead of in viewDidLoad,
-				// so that the parameter tree is set up before we build our @AUParameterUI properties
-				DispatchQueue.main.async {
-					self.configureSwiftUIView(audioUnit: audioUnit)
-				}
-			}
-			
-			audioUnit.setupParameterTree(YoiExtensionParameterSpecs.createAUParameterTree())
-			
-			self.observation = audioUnit.observe(\.allParameterValues, options: [.new]) { object, change in
-				guard let tree = audioUnit.parameterTree else { return }
-				
-				// This insures the Audio Unit gets initial values from the host.
-				for param in tree.allParameters { param.value = param.value }
-			}
-			
-			guard audioUnit.parameterTree != nil else {
-				log.error("Unable to access AU ParameterTree")
-				return audioUnit
-			}
-			
-			return audioUnit
+			try self.makeAudioUnit(componentDescription)
 		}
 	}
-    
+
+    @MainActor
+    private func makeAudioUnit(_ componentDescription: AudioComponentDescription) throws -> AUAudioUnit {
+        audioUnit = try YoiExtensionAudioUnit(componentDescription: componentDescription, options: [])
+
+        guard let audioUnit = self.audioUnit as? YoiExtensionAudioUnit else {
+            log.error("Unable to create YoiExtensionAudioUnit")
+            return self.audioUnit!
+        }
+
+        defer {
+            // Configure the SwiftUI view after creating the AU, instead of in viewDidLoad,
+            // so that the parameter tree is set up before we build our @AUParameterUI properties.
+            DispatchQueue.main.async { [weak self] in
+                self?.configureSwiftUIView(audioUnit: audioUnit)
+            }
+        }
+
+        audioUnit.setupParameterTree(YoiExtensionParameterSpecs.createAUParameterTree())
+
+        observation = audioUnit.observe(\.allParameterValues, options: [.new]) { [weak audioUnit] _, _ in
+            guard let tree = audioUnit?.parameterTree else { return }
+
+            // This ensures the Audio Unit gets initial values from the host.
+            for param in tree.allParameters { param.value = param.value }
+        }
+
+        guard audioUnit.parameterTree != nil else {
+            log.error("Unable to access AU ParameterTree")
+            return audioUnit
+        }
+
+        return audioUnit
+    }
+
     private func configureSwiftUIView(audioUnit: AUAudioUnit) {
         if let host = hostingController {
             host.removeFromParent()

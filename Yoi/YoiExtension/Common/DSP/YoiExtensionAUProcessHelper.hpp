@@ -11,6 +11,7 @@
 #import <AVFoundation/AVFoundation.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <span>
 #include <vector>
 #include "YoiExtensionDSPKernel.hpp"
@@ -50,6 +51,14 @@ public:
         // A buffer the host left without memory (allowed: it then expects the audio unit's own)
         // gets the scratch made in setChannelCount.
         const size_t channelCount = std::min<size_t>(outBufferList->mNumberBuffers, mOutputBuffers.size());
+        for (size_t channel = channelCount; channel < outBufferList->mNumberBuffers; ++channel) {
+            AudioBuffer& buffer = outBufferList->mBuffers[channel];
+            if (buffer.mData != nullptr) {
+                const size_t availableSamples = buffer.mDataByteSize / sizeof(float);
+                const size_t expectedSamples = size_t(frameCount) * size_t(buffer.mNumberChannels);
+                std::fill_n(static_cast<float*>(buffer.mData), std::min(availableSamples, expectedSamples), 0.0f);
+            }
+        }
         for (size_t channel = 0; channel < channelCount; ++channel) {
             AudioBuffer& buffer = outBufferList->mBuffers[channel];
             if (buffer.mData == nullptr) {
@@ -76,9 +85,14 @@ public:
             }
             
             // **** start late events late.
-            auto timeZero = AUEventSampleTime(0);
-            auto headEventTime = nextEvent->head.eventSampleTime;
-            AUAudioFrameCount framesThisSegment = AUAudioFrameCount(std::max(timeZero, headEventTime - now));
+            AUEventSampleTime headEventTime = nextEvent->head.eventSampleTime;
+            AUAudioFrameCount framesThisSegment = 0;
+            if (headEventTime > now) {
+                // Unsigned subtraction gives the exact non-negative distance without signed
+                // overflow even for an extreme host-supplied timestamp.
+                const uint64_t distance = uint64_t(headEventTime) - uint64_t(now);
+                framesThisSegment = AUAudioFrameCount(std::min<uint64_t>(distance, framesRemaining));
+            }
             
             // Compute everything before the next event.
             if (framesThisSegment > 0) {

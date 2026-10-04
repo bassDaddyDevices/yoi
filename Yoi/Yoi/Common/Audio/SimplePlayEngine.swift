@@ -39,7 +39,7 @@ extension AVAudioUnit {
 
 		if #available(macOS 13.0, iOS 16.0, *) {
 			if viewController == nil {
-				let genericViewController = await AUGenericViewController()
+				let genericViewController = AUGenericViewController()
 				await MainActor.run {
 					genericViewController.auAudioUnit = self.auAudioUnit
 				}
@@ -49,6 +49,18 @@ extension AVAudioUnit {
 
 		return viewController
 	}
+}
+
+/// Holds the audio unit's MIDI event list block behind a lock, so CoreMIDI's
+/// receive thread can read it while the main actor swaps audio units.
+nonisolated private final class MIDIEventListBlockStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBlock: AUMIDIEventListBlock?
+
+    var block: AUMIDIEventListBlock? {
+        get { lock.withLock { storedBlock } }
+        set { lock.withLock { storedBlock = newValue } }
+    }
 }
 
 /// Manages the interaction with the AudioToolbox and AVFoundation frameworks.
@@ -76,8 +88,9 @@ public class SimplePlayEngine {
     // This block will be called every render cycle and will receive MIDI events
     private let midiOutBlock: AUMIDIOutputEventBlock = { sampleTime, cable, length, data in return noErr }
     
-    // This block can be used to send MIDI UMP events to the Audio Unit
-    var scheduleMIDIEventListBlock: AUMIDIEventListBlock? = nil
+    // This block can be used to send MIDI UMP events to the Audio Unit.
+    // CoreMIDI reads it on its own thread, so it lives in a Mutex outside the main actor.
+    private nonisolated let scheduleMIDIEventListBlock = MIDIEventListBlockStore()
     
     // MARK: Initialization
     
@@ -94,8 +107,9 @@ public class SimplePlayEngine {
     }
     
     private func setupMIDI() {
-        if !MIDIManager.shared.setupPort(midiProtocol: MIDIProtocolID._2_0, receiveBlock: { [weak self] eventList, _ in
-            if let scheduleMIDIEventListBlock = self?.scheduleMIDIEventListBlock {
+        let blockStore = scheduleMIDIEventListBlock
+        if !MIDIManager.shared.setupPort(midiProtocol: MIDIProtocolID._2_0, receiveBlock: { eventList, _ in
+            if let scheduleMIDIEventListBlock = blockStore.block {
                 _ = scheduleMIDIEventListBlock(AUEventSampleTimeImmediate, 0, eventList)
             }
         }) {
@@ -260,7 +274,7 @@ public class SimplePlayEngine {
         
         // Internal function to resume playing and call the completion handler.
         func rewiringComplete() {
-            scheduleMIDIEventListBlock = auAudioUnit.scheduleMIDIEventListBlock
+            scheduleMIDIEventListBlock.block = auAudioUnit.scheduleMIDIEventListBlock
             if isPlaying {
                 player.play()
             }

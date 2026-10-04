@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -116,17 +117,19 @@ inline float lookup(const float* table, int size, double x) {
 }
 
 /// Hands rendered tables from the thread that edits the curve to the render thread without a
-/// lock, as a seqlock: the sequence number is odd while a write is in progress, so a reader that
-/// catches a half-written table can tell and keep the one it has.
+/// lock, as a seqlock: each payload slot is atomic, and the sequence number tells a reader whether
+/// it observed one complete publication or crossed a concurrent write.
 ///
 /// Only one thread may publish at a time.
 struct CurveExchange {
-    std::array<float, kCurveTableSize> shared{};
+    std::array<uint32_t, kCurveTableSize> shared{};
     uint32_t sequence = 0;
 
     void publish(const float* table) {
         atomics::incrementAcquireRelease(sequence);
-        std::memcpy(shared.data(), table, sizeof(float) * size_t(kCurveTableSize));
+        for (int i = 0; i < kCurveTableSize; ++i) {
+            atomics::storeRelaxed(shared[size_t(i)], std::bit_cast<uint32_t>(table[i]));
+        }
         atomics::incrementAcquireRelease(sequence);
     }
 
@@ -142,7 +145,10 @@ struct CurveExchange {
             if ((before & 1u) != 0u) {
                 continue;
             }
-            std::memcpy(destination.data(), shared.data(), sizeof(float) * size_t(kCurveTableSize));
+            for (int i = 0; i < kCurveTableSize; ++i) {
+                const uint32_t bits = atomics::loadRelaxed(shared[size_t(i)]);
+                destination[size_t(i)] = std::bit_cast<float>(bits);
+            }
             if (atomics::loadAcquire(sequence) == before) {
                 observed = before;
                 return true;

@@ -261,7 +261,7 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 sendPresetState(message: "That preset is no longer available.", error: true)
                 return
             }
-            audioUnit.currentPreset = preset
+            audioUnit.selectPresetFromEditor(preset)
             sendFullState()
             sendPresetState(message: "Loaded preset.")
 
@@ -314,10 +314,13 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     private func startUpdates() {
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: Self.updateInterval, repeats: true) { [weak self] _ in
+        timer = Timer(timeInterval: Self.updateInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.sendUpdates()
             }
+        }
+        if let timer {
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
 

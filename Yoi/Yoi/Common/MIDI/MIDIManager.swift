@@ -79,7 +79,7 @@ class MIDIManager: Identifiable {
         return true
     }
     
-    func setupPort(midiProtocol: MIDIProtocolID, receiveBlock: @escaping @Sendable MIDIReceiveBlock) -> Bool {
+    func setupPort(midiProtocol: MIDIProtocolID, receiveBlock: @escaping @Sendable (UnsafePointer<MIDIEventList>, UnsafeMutableRawPointer?) -> Void) -> Bool {
         guard setupClient() else {
             return false
         }

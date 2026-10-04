@@ -11,7 +11,9 @@
 import Foundation
 import AudioToolbox
 
-private let logarithmic: AudioUnitParameterOptions = [.flag_IsWritable, .flag_IsReadable, .flag_DisplayLogarithmic]
+private let logarithmic: AudioUnitParameterOptions = [.flag_IsWritable, .flag_IsReadable, .flag_DisplayLogarithmic, .flag_CanRamp]
+private let rampable: AudioUnitParameterOptions = [.flag_IsWritable, .flag_IsReadable, .flag_CanRamp]
+private let discrete: AudioUnitParameterOptions = [.flag_IsWritable, .flag_IsReadable]
 
 let YoiExtensionParameterSpecs = ParameterTreeSpec {
     ParameterGroupSpec(identifier: "macros", name: "Macros") {
@@ -21,7 +23,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Voice",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .macroThroat,
@@ -29,7 +32,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Throat",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 100.0
+            defaultValue: 100.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .macroPower,
@@ -37,7 +41,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Power",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .macroControl,
@@ -45,7 +50,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Control",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .macroWidth,
@@ -53,7 +59,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Width",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
     }
     ParameterGroupSpec(identifier: "output", name: "Output") {
@@ -63,7 +70,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Output Level",
             units: .decibels,
             valueRange: -48.0...6.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
     }
     ParameterGroupSpec(identifier: "voice", name: "Voice") {
@@ -73,7 +81,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Glide Time",
             units: .milliseconds,
             valueRange: 0.0...2000.0,
-            defaultValue: 60.0
+            defaultValue: 60.0,
+            flags: logarithmic
         )
         ParameterSpec(
             address: .glideMode,
@@ -82,6 +91,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 0,
+            flags: discrete,
             valueStrings: ["Legato", "Always"]
         )
         ParameterSpec(
@@ -90,7 +100,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Bend Range",
             units: .relativeSemiTones,
             valueRange: 0.0...24.0,
-            defaultValue: 2.0
+            defaultValue: 2.0,
+            flags: rampable
         )
     }
     ParameterGroupSpec(identifier: "oscillators", name: "Oscillators") {
@@ -101,6 +112,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 0,
+            flags: discrete,
             valueStrings: ["-1 Oct", "-2 Oct"]
         )
         ParameterSpec(
@@ -118,7 +130,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Sub Follow",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
     }
     ParameterGroupSpec(identifier: "filter", name: "Filter") {
@@ -129,6 +142,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 0,
+            flags: discrete,
             valueStrings: ["LP", "BP"]
         )
         ParameterSpec(
@@ -146,7 +160,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Resonance",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 30.0
+            defaultValue: 30.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .filterMirror,
@@ -154,7 +169,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Mirror",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
     }
     ParameterGroupSpec(identifier: "amp", name: "Amp Envelope") {
@@ -182,7 +198,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Sustain",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 100.0
+            defaultValue: 100.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .ampRelease,
@@ -201,7 +218,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Env Amount",
             units: .octaves,
             valueRange: 0.0...8.0,
-            defaultValue: 3.0
+            defaultValue: 3.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .envTimeMode,
@@ -210,6 +228,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 0,
+            flags: discrete,
             valueStrings: ["Sync", "Free"]
         )
         ParameterSpec(
@@ -219,6 +238,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...AUValue(syncLengthNames.count - 1),
             defaultValue: 16,   // 1.5 bars
+            flags: discrete,
             valueStrings: syncLengthNames
         )
         ParameterSpec(
@@ -237,6 +257,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...AUValue(directionNames.count - 1),
             defaultValue: 0,
+            flags: discrete,
             valueStrings: directionNames
         )
         ParameterSpec(
@@ -246,6 +267,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 0,
+            flags: discrete,
             valueStrings: ["Off", "On"]
         )
         ParameterSpec(
@@ -254,7 +276,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Env Re-Trigger",
             units: .boolean,
             valueRange: 0...1,
-            defaultValue: 0
+            defaultValue: 0,
+            flags: discrete
         )
         ParameterSpec(
             address: .accelStart,
@@ -280,7 +303,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Accel Curve",
             units: .generic,
             valueRange: -1.0...1.0,
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
     }
     ParameterGroupSpec(identifier: "grit", name: "Grit") {
@@ -291,6 +315,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...2,
             defaultValue: 1,
+            flags: discrete,
             valueStrings: ["Off", "S&H", "Downsample"]
         )
         ParameterSpec(
@@ -299,7 +324,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "Fold",
             units: .percent,
             valueRange: 0.0...5.0,   // past 5 % the fold only gets worse (redesign-macros)
-            defaultValue: 0.0
+            defaultValue: 0.0,
+            flags: rampable
         )
         ParameterSpec(
             address: .foldPosition,
@@ -308,6 +334,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...2,
             defaultValue: 2,
+            flags: discrete,
             valueStrings: ["Pre-filter", "Pre-downsample", "Post-downsample"]
         )
         ParameterSpec(
@@ -317,6 +344,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 1,
+            flags: discrete,
             valueStrings: ["Off", "On"]
         )
         ParameterSpec(
@@ -326,6 +354,7 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             units: .indexed,
             valueRange: 0...1,
             defaultValue: 0,
+            flags: discrete,
             valueStrings: ["Free", "Lock"]
         )
     }
@@ -336,7 +365,8 @@ let YoiExtensionParameterSpecs = ParameterTreeSpec {
             name: "OTT Time",
             units: .percent,
             valueRange: 0.0...100.0,
-            defaultValue: 50.0
+            defaultValue: 50.0,
+            flags: rampable
         )
     }
 }
@@ -358,7 +388,7 @@ extension ParameterSpec {
         valueRange: ClosedRange<AUValue>,
         defaultValue: AUValue,
         unitName: String? = nil,
-        flags: AudioUnitParameterOptions = [AudioUnitParameterOptions.flag_IsWritable, AudioUnitParameterOptions.flag_IsReadable],
+        flags: AudioUnitParameterOptions = [.flag_IsWritable, .flag_IsReadable, .flag_CanRamp],
         valueStrings: [String]? = nil,
         dependentParameters: [NSNumber]? = nil
     ) {

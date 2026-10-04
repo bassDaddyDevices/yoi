@@ -81,7 +81,9 @@ public:
     YoiExtensionDSPKernel() {
         // A new instance starts on the first factory drawing, already in place for the first block.
         loadFactoryShape(0);
-        mCurrentTable = mCurveExchange.shared;
+        for (int i = 0; i < bdd::kCurveTableSize; ++i) {
+            mCurrentTable[size_t(i)] = std::bit_cast<float>(mCurveExchange.shared[size_t(i)]);
+        }
         mPreviousTable = mCurrentTable;
         mObservedCurveSequence = mCurveExchange.sequence;
     }

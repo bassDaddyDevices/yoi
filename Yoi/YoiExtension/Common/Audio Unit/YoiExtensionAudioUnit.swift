@@ -50,13 +50,14 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         return [0, 1, 0, 2]
     }
     
-    public override var  maximumFramesToRender: AUAudioFrameCount {
-        get {
-            return kernel.pointee.maximumFramesToRender()
-        }
-
+    /// The process helper's scratch buffers are sized from this value during allocation; it cannot
+    /// be increased while resources are live. Clamp our storage to the superclass's accepted value.
+    public override var maximumFramesToRender: AUAudioFrameCount {
+        get { kernel.pointee.maximumFramesToRender() }
         set {
-            kernel.pointee.setMaximumFramesToRender(newValue)
+            guard !renderResourcesAllocated else { return }
+            super.maximumFramesToRender = newValue
+            kernel.pointee.setMaximumFramesToRender(super.maximumFramesToRender)
         }
     }
 
@@ -87,10 +88,10 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         kernel.pointee.requestReset()
     }
 
-    /// How long the sound can carry on after the last note ends, so hosts that stop pulling at the
-    /// end of a region (offline bounces) don't cut the release. It follows the Release setting.
+    /// Hosts may cache this property, while Release is automatable. Report the supported maximum
+    /// release (10 s) plus the kernel's tail margin so offline bounces never use a stale shorter tail.
     public override var tailTime: TimeInterval {
-        TimeInterval(kernel.pointee.tailSeconds())
+        10.5
     }
 
     // Allocate resources required to render.
@@ -127,8 +128,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             kernel.pointee.setParameter(param.address, param.value)
 		}
 
-		setupParameterCallbacks()
-        currentPreset = factoryPresets?.first
+        setupParameterCallbacks()
 	}
 
 	private func setupParameterCallbacks() {
@@ -235,12 +235,17 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         curveLock.lock()
         defer { curveLock.unlock() }
         kernel.pointee.loadFactoryShape(Int32(index))
-        curveRevision &+= 1
+        _curveRevision &+= 1
     }
 
     /// Goes up by one whenever the drawing changes, from any source (editor, factory shape, state
     /// restore), so an editor can tell when to redraw.
-    private(set) var curveRevision = 0
+    private var _curveRevision = 0
+    var curveRevision: Int {
+        curveLock.lock()
+        defer { curveLock.unlock() }
+        return _curveRevision
+    }
 
     /// The drawing as the envelope plays it, sampled at `count` points across 0...1. Editors draw
     /// this rather than working out the curve themselves.
@@ -277,7 +282,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             curveLock.lock()
             defer { curveLock.unlock() }
             kernel.pointee.setEnvelopeCurve(xs, ys, bends, Int32(newValue.count))
-            curveRevision &+= 1
+            _curveRevision &+= 1
         }
     }
 
@@ -295,19 +300,28 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             }
             if preset.number >= 0 {
                 guard (factoryPresets ?? []).contains(where: { $0.number == preset.number }) else { return }
-                resetToDefaults()
+                if super.currentPreset?.number != preset.number {
+                    resetToDefaults()
+                }
                 super.currentPreset = preset
                 return
             }
             guard let state = try? presetState(for: preset) else { return }
             super.fullState = state
-            if let points = state[Self.envelopeCurveStateKey] as? [[NSNumber]] {
-                envelopeCurve = points.map { point in point.map { $0.floatValue } }
-            } else {
-                loadFactoryShape(0)
-            }
+            restoreEnvelopeCurve(from: state)
             super.currentPreset = preset
         }
+    }
+
+    /// The editor's explicit Init selection resets the patch even if Init was already selected.
+    func selectPresetFromEditor(_ preset: AUAudioUnitPreset) {
+        guard preset.number >= 0,
+              (factoryPresets ?? []).contains(where: { $0.number == preset.number }) else {
+            currentPreset = preset
+            return
+        }
+        resetToDefaults()
+        super.currentPreset = preset
     }
 
     public override var supportsUserPresets: Bool { true }
@@ -329,13 +343,34 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         }
         set {
             super.fullState = newValue
-            guard let newValue,
-                  let points = newValue[Self.envelopeCurveStateKey] as? [[NSNumber]] else {
+            guard let newValue else {
                 loadFactoryShape(0)
                 return
             }
-            envelopeCurve = points.map { point in point.map { $0.floatValue } }
+            restoreEnvelopeCurve(from: newValue)
         }
+    }
+
+    /// Restore only the persistent curve format we understand. A missing curve in an older
+    /// state starts from Init; a present but malformed or newer-version curve leaves the current
+    /// drawing intact rather than silently destroying it.
+    private func restoreEnvelopeCurve(from state: [String: Any]) {
+        let rawVersion = state[Self.stateVersionKey] as? NSNumber
+        let version = rawVersion?.intValue ?? 1
+        guard version == 1 else { return }
+        guard let rawPoints = state[Self.envelopeCurveStateKey] else {
+            loadFactoryShape(0)
+            return
+        }
+        if let rows = rawPoints as? [[NSNumber]], rows.allSatisfy({ $0.count == 3 }) {
+            envelopeCurve = rows.map { $0.map(\.floatValue) }
+            return
+        }
+        guard let rows = rawPoints as? [[Any]],
+              rows.allSatisfy({ $0.count == 3 && $0.allSatisfy { $0 is NSNumber } }) else {
+            return
+        }
+        envelopeCurve = rows.map { row in row.map { ($0 as! NSNumber).floatValue } }
     }
 
     // MARK: - Presets
