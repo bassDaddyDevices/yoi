@@ -300,8 +300,10 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             }
             if preset.number >= 0 {
                 guard (factoryPresets ?? []).contains(where: { $0.number == preset.number }) else { return }
+                // Only a change of selection loads it: a host re-applying the selection it already
+                // has (after restoring fullState, say) must not throw away the user's edits.
                 if super.currentPreset?.number != preset.number {
-                    resetToDefaults()
+                    loadFactoryPreset(number: preset.number)
                 }
                 super.currentPreset = preset
                 return
@@ -313,24 +315,50 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
         }
     }
 
-    /// The editor's explicit Init selection resets the patch even if Init was already selected.
+    /// Choosing a factory preset in the editor always reloads it, even if it was already selected,
+    /// so it doubles as "revert to the factory version".
     func selectPresetFromEditor(_ preset: AUAudioUnitPreset) {
         guard preset.number >= 0,
               (factoryPresets ?? []).contains(where: { $0.number == preset.number }) else {
             currentPreset = preset
             return
         }
-        resetToDefaults()
+        loadFactoryPreset(number: preset.number)
         super.currentPreset = preset
     }
 
     public override var supportsUserPresets: Bool { true }
 
+    /// The factory presets shipped in the extension (Presets/Factory), read once per process.
+    /// `Bundle(for:)` rather than `.main`, which is the host's bundle when a host loads the
+    /// extension in-process.
+    private static let factoryPresetFiles = PresetFile.factoryPresets(for: "YOI", in: Bundle(for: YoiExtensionAudioUnit.self))
+
+    /// Init (number 0, built in: every default and Init's drawing), then the shipped presets.
     public override var factoryPresets: [AUAudioUnitPreset]? {
-        let preset = AUAudioUnitPreset()
-        preset.number = 0
-        preset.name = "Init"
-        return [preset]
+        let initPreset = AUAudioUnitPreset()
+        initPreset.number = 0
+        initPreset.name = "Init"
+        return [initPreset] + Self.factoryPresetFiles.map { file in
+            let preset = AUAudioUnitPreset()
+            preset.number = file.number
+            preset.name = file.name
+            return preset
+        }
+    }
+
+    /// Defaults first, so anything the file doesn't mention (a parameter newer than the preset)
+    /// is at its default; then the file's values, clamped to each parameter's range.
+    private func loadFactoryPreset(number: Int) {
+        resetToDefaults()
+        guard number != 0, let file = Self.factoryPresetFiles.first(where: { $0.number == number }) else { return }
+        for parameter in parameterTree?.allParameters ?? [] {
+            guard let value = file.parameters[parameter.identifier], value.isFinite else { continue }
+            parameter.value = min(max(AUValue(value), parameter.minValue), parameter.maxValue)
+        }
+        if let drawing = file.drawing {
+            envelopeCurve = drawing
+        }
     }
 
     /// The parameter tree covers the knobs; the drawn envelope is saved alongside them.

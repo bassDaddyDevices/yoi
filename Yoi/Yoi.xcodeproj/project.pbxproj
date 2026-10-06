@@ -59,12 +59,12 @@
 			membershipExceptions = (
 				Info.plist,
 				README.md,
-				WebUI/bdd-gallery.html,
-				WebUI/bdd-gallery.js,
-				WebUI/yoi-standin.js,
-				WebUI/index-pixel.html,
-				WebUI/yoi-panel-pixel.js,
-				WebUI/yoi-pixel.css,
+				"WebUI/bdd-gallery.html",
+				"WebUI/bdd-gallery.js",
+				"WebUI/index-pixel.html",
+				"WebUI/yoi-panel-pixel.js",
+				"WebUI/yoi-pixel.css",
+				"WebUI/yoi-standin.js",
 			);
 			target = 72169F8F3068693000E8AE81 /* YoiExtension */;
 		};
