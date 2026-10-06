@@ -112,8 +112,11 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         timer = nil
     }
 
+    /// Only while the editor is on screen: calling into a page WebKit has suspended wakes it just to
+    /// be suspended again, and a page caught in that loop for long enough came back blank (white)
+    /// when its window was finally shown, while still answering pings.
     func resume() {
-        if pageReady {
+        if pageReady && isVisible {
             sendFullState()
             startUpdates()
         }
@@ -196,7 +199,11 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             pageReady = true
             pendingPing = nil
             sendFullState()
-            startUpdates()
+            // Hosts such as Live build the editor with the plug-in, long before its window opens;
+            // the updates start when it's shown (see `resume`).
+            if isVisible {
+                startUpdates()
+            }
 
         case "pong":
             if let token = (body["token"] as? NSNumber)?.intValue, token == pendingPing {
