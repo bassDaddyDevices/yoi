@@ -3,9 +3,10 @@
 //
 // The page never talks to a plug-in format directly. It calls the functions on `window.bdd`, and
 // the plug-in answers by calling `window.bdd.receive(state)`. In the Audio Unit the messages go
-// through WebKit's message handler named "bdd"; the VST3 build binds the same names through its
-// web view. With no plug-in at all (the page opened straight in a browser) messages go to
-// `window.bddStandIn` if one is loaded, so the page can be worked on without a host.
+// through WebKit's message handler named "bdd"; the VST3 build binds one function, `bddPost`,
+// through choc's web view, and takes the same messages. With no plug-in at all (the page opened
+// straight in a browser) messages go to `window.bddStandIn` if one is loaded, so the page can be
+// worked on without a host.
 //
 // Nothing here knows about YOI; every Bass Daddy Devices synth can use it as is.
 
@@ -13,11 +14,14 @@
     'use strict';
 
     const webkit = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.bdd;
+    // choc defines its bindings before any of the page's scripts run.
+    const bound = typeof window.bddPost === 'function' ? window.bddPost : null;
+    const native = webkit ? (message) => webkit.postMessage(message) : bound;
     const listeners = [];
 
     function post(message) {
-        if (webkit) {
-            webkit.postMessage(message);
+        if (native) {
+            native(message);
         } else if (window.bddStandIn) {
             window.bddStandIn.handle(message);
         }
@@ -25,20 +29,20 @@
 
     // Errors on the page go to the plug-in's log too; inside a host there's no console to see.
     window.addEventListener('error', (event) => {
-        if (webkit) {
-            webkit.postMessage({ type: 'error', message: String(event.message), source: String(event.filename || ''), line: event.lineno || 0 });
+        if (native) {
+            native({ type: 'error', message: String(event.message), source: String(event.filename || ''), line: event.lineno || 0 });
         }
     });
     window.addEventListener('unhandledrejection', (event) => {
-        if (webkit) {
-            webkit.postMessage({ type: 'error', message: String(event.reason), source: '', line: 0 });
+        if (native) {
+            native({ type: 'error', message: String(event.reason), source: '', line: 0 });
         }
     });
 
     const api = {
         /** True inside a plug-in, false in a plain browser. */
         get connected() {
-            return Boolean(webkit);
+            return Boolean(native);
         },
 
         /** Calls `listener(state)` with everything the plug-in sends. */

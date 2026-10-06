@@ -20,6 +20,7 @@ Yoi/                          Xcode project (Audio Unit Extension App template)
     │                                   curve and its looping playback, the downsamplers, the
     │                                   wavefolder, and a holder for host blocks
     ├── Parameters/           parameter addresses (C) and the host-facing tree (Swift)
+    ├── Presets/Factory/      factory presets, one bdd-preset JSON file each (read by both formats)
     ├── UI/                   WebEditor.swift (hosts the HTML editor and bridges it to the audio
     │                         unit), plus the SwiftUI slider panel kept as a fallback
     └── WebUI/                the editor page (plain HTML/CSS/JS, no build step):
@@ -27,8 +28,14 @@ Yoi/                          Xcode project (Audio Unit Extension App template)
                                          to the plug-in, pixel font, knobs/switches/readouts/
                                          menus, and the curve editor
                               yoi-*      YOI's own: panel layout, look, and browser stand-in
+VST3/                         the VST3 build (CMake, VST3 SDK + choc), same kernel, page and presets
+├── source/shared/            Bass Daddy Devices VST3 glue, no YOI knowledge: parameter specs,
+│                             the web-view editor, preset and drawing files, platform code
+├── source/yoi_*              YOI's processor, controller, editor messages and parameter table
+└── tests/                    parameter table vs the AU, preset format, factory presets, state
 Tests/                        C++ render tests for the kernel (CMake)
-Tools/                        update-standin.sh (refreshes the browser stand-in's snapshot)
+Tools/                        update-standin.sh (refreshes the browser stand-in's snapshot);
+                              aupreset-to-json.swift (turns an AU user preset into a factory preset)
 ```
 
 ## Building and trying it
@@ -41,6 +48,14 @@ From the command line:
 xcodebuild -project Yoi/Yoi.xcodeproj -scheme Yoi build   # build, signed with the team in the project
 auval -v aumu yoi1 Bsdd                                  # validate once the app has run or been built
 ```
+
+### VST3 (macOS)
+
+```sh
+VST3/scripts/build-mac.sh          # configure, build, run Steinberg's validator and the tests
+```
+
+That links `YOI.vst3` into `~/Library/Audio/Plug-Ins/VST3`; rescan plug-ins and it appears as **YOI** by Bass Daddy Devices. The first configure downloads the VST3 SDK (v3.8.1, MIT) and choc (ISC); point `VST3_SDK_DIR` and `CHOC_DIR` at existing checkouts to skip that. The VST3 compiles in the editor page from `Yoi/YoiExtension/WebUI` and the presets from `Presets/Factory`, so rebuild it after changing either. Its own presets and drawings live in `~/Library/Application Support/Bass Daddy Devices/YOI`.
 
 ## Working on the editor
 
@@ -67,3 +82,5 @@ The DSP tests render audio through the kernel exactly as the VST3 build will com
 ```sh
 cmake -S Tests -B Tests/build && cmake --build Tests/build && ctest --test-dir Tests/build --output-on-failure
 ```
+
+The VST3's tests (`ctest --test-dir VST3/build`) check its parameter table against the AU's own descriptor (the stand-in snapshot), the preset format's rules, every factory preset (and render each through the kernel), saved state, and the drawing library.
