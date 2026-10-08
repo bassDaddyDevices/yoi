@@ -47,6 +47,25 @@ std::filesystem::path productDirectory(const std::string& product) {
     return base / L"Bass Daddy Devices" / std::filesystem::path(std::u8string(product.begin(), product.end()));
 }
 
+std::string clipboardText() {
+    std::string out;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(nullptr)) {
+        return out;
+    }
+    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* text = static_cast<const wchar_t*>(GlobalLock(data))) {
+            const int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+            if (size > 1) {
+                out.resize(size_t(size - 1));
+                WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), size, nullptr, nullptr);
+            }
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return out;
+}
+
 void revealInFileBrowser(const std::filesystem::path& folder) {
     ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }

@@ -25,6 +25,7 @@
                 <button id="preset-delete" class="preset-action delete" type="button" disabled>DELETE</button>
                 <span id="preset-status" class="preset-status" role="status" hidden></span>
             </div>
+            <button id="license-badge" class="license-badge" type="button" hidden title="Activate YOI">DEMO · ACTIVATE</button>
             <button id="details-toggle" class="details-toggle" type="button" aria-expanded="false" aria-controls="details-sheet">SETTINGS</button>
         </header>
 
@@ -86,6 +87,23 @@
                 <section class="details-page" data-page="0" aria-label="Voice settings"></section>
                 <section class="details-page" data-page="1" aria-label="Envelope settings" hidden></section>
                 <section class="details-page" data-page="2" aria-label="Finish settings" hidden></section>
+                <section class="details-page license-page" data-page="3" aria-label="License" hidden>
+                    <section class="detail-section license-section">
+                        <h3>LICENSE</h3>
+                        <p id="license-summary" class="license-summary"></p>
+                        <form id="license-form" class="license-form">
+                            <label class="preset-name-field" for="license-input">KEY FROM YOUR RECEIPT, OR A LICENSE
+                                <textarea id="license-input" rows="3" autocomplete="off" spellcheck="false" placeholder="Paste here, or drop a .bddlicense file"></textarea>
+                            </label>
+                            <div class="preset-dialog-actions">
+                                <button id="license-paste" class="preset-action" type="button" title="Paste from the clipboard and activate">PASTE &amp; ACTIVATE</button>
+                                <button id="license-activate" class="preset-action primary" type="submit">ACTIVATE</button>
+                            </div>
+                        </form>
+                        <p id="license-message" class="license-message" role="status"></p>
+                        <p class="license-help">No internet on this computer? Get a license file at auth.bass-daddy.com on another one, then paste or drop it here.</p>
+                    </section>
+                </section>
             </div>
         </section>
         <section id="preset-dialog" class="preset-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-dialog-title" hidden>

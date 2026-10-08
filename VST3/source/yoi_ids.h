@@ -16,6 +16,13 @@ namespace yoi {
 static const Steinberg::FUID kProcessorUID(0x705785BC, 0x1EE448C6, 0xB8256DF6, 0xB7E8A304);
 static const Steinberg::FUID kControllerUID(0x25AC449A, 0x389F4AB3, 0x880DDEAF, 0xA0690C0A);
 
+/// Controller -> processor: a license was installed. No payload: the processor reads the licenses
+/// folder itself rather than trusting a message.
+inline constexpr const char* kLicenseChangedMessage = "YoiLicenseChanged";
+
+/// Licenses unlock a product up to a major version (YOI_DOCS/decisions/licensing.md).
+inline constexpr int kProductMajor = 1;
+
 /// Controller -> processor: the drawing changed. Carries `kDrawingAttribute`, the points as
 /// float triples (x, y, bend).
 inline constexpr const char* kDrawingMessage = "YoiDrawing";

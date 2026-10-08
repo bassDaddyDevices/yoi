@@ -164,3 +164,17 @@ button { color: inherit; font: inherit; }
     .character-values { flex-direction: column; align-items: flex-end; gap: 5px; }
     .details-sheet { left: 620px; right: 90px; }
 }
+
+/* Licensing (YOI_DOCS/decisions/licensing.md): the DEMO button and the SETTINGS LICENSE page. */
+.license-badge { margin-left: auto; margin-right: 10px; padding: 9px 12px; border: 1px solid var(--bdd-accent); border-radius: 8px; background: color-mix(in srgb, var(--bdd-accent) 14%, var(--bdd-card)); color: var(--bdd-accent); font: 800 10px/1 var(--bdd-font); letter-spacing: .12em; cursor: pointer; }
+.license-badge:hover { background: color-mix(in srgb, var(--bdd-accent) 24%, var(--bdd-card)); }
+.license-badge[hidden] { display: none; }
+.license-page { grid-template-columns: 1fr; }
+.license-section { display: flex; flex-direction: column; gap: 10px; }
+.license-summary { margin: 0; color: var(--bdd-ink-soft); font: 600 12px/1.45 var(--bdd-font); }
+.license-form textarea { width: 100%; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--bdd-line-strong); border-radius: 8px; outline: none; background: var(--bdd-ground); color: var(--bdd-ink); font: 500 11px/1.4 ui-monospace, Menlo, monospace; letter-spacing: normal; }
+.license-form textarea:focus, .license-section.dropping textarea { border-color: var(--bdd-accent); }
+.license-message { min-height: 15px; margin: 0; color: var(--bdd-ink-soft); font: 600 11px/1.4 var(--bdd-font); }
+.license-message.error { color: #f0a09d; }
+.license-help { margin: 0; color: var(--bdd-muted); font: 500 10px/1.45 var(--bdd-font); }
+.license-section.licensed .license-form, .license-section.licensed .license-help { display: none; }

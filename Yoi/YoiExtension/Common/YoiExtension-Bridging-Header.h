@@ -7,3 +7,4 @@
 
 #import "YoiExtensionParameterAddresses.h"
 #import "YoiExtensionAUProcessHelper.hpp"
+#import "BDDLicenseStore.hpp"

@@ -13,6 +13,8 @@
 #include "yoi_params.h"
 #include "yoi_state.h"
 
+#include "BDDLicense.hpp"
+
 #include "shared/bdd_drawing_library.h"
 #include "shared/bdd_preset_library.h"
 
@@ -87,6 +89,13 @@ public:
     const CurrentPreset& currentPreset() const { return mCurrentPreset; }
     void setCurrentPreset(CurrentPreset preset) { mCurrentPreset = std::move(preset); }
 
+    /// The license this copy runs under, as the processor also reads it.
+    const bdd::license::License& license() const { return mLicense; }
+
+    /// Checks a pasted license and, if it's valid, saves it and tells the processor to play in full.
+    /// Returns the check, so the editor can say what was wrong.
+    bdd::license::License installLicense(const std::string& token);
+
     bdd::vst3::PresetLibrary& presets();
     bdd::vst3::DrawingLibrary& drawings();
 
@@ -104,6 +113,7 @@ private:
     CurrentPreset mCurrentPreset;
     std::unique_ptr<bdd::vst3::PresetLibrary> mPresets;
     std::unique_ptr<bdd::vst3::DrawingLibrary> mDrawings;
+    bdd::license::License mLicense;
     Editor* mEditor = nullptr;
     Steinberg::Vst::ParamID mWritingParameter = 0xFFFFFFFF;
 };

@@ -1,0 +1,16 @@
+# auth.bass-daddy.com, a Cloudflare Worker. See README.md.
+name = "bdd-license"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Needs bass-daddy.com's DNS on Cloudflare. Cloudflare creates the DNS record for this itself.
+routes = [
+  { pattern = "auth.bass-daddy.com", custom_domain = true }
+]
+
+[vars]
+# Fill in YOI's Gumroad product_id: the product's editor page, Content tab, License key block.
+# It isn't secret. maxActivations is per Gumroad sale.
+PRODUCTS = '{ "YOI": { "gumroadProductId": "Opo8b_oq_j-dAJHEX-zCIg==", "major": 1, "maxActivations": 5 } }'
+
+# Secret, not here:  npx wrangler secret put LICENSE_PRIVATE_KEY   (from scripts/make-keys.mjs)

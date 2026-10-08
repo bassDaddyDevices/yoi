@@ -158,14 +158,17 @@ add_custom_command(
 )
 
 # Everything but the VST3 classes, so the tests link the same code the plug-in runs.
+set(YOI_LICENSING_DIR "${YOI_EXTENSION_DIR}/Licensing")
 add_library(yoi_common STATIC
+    "${YOI_LICENSING_DIR}/ThirdParty/monocypher/monocypher.c"
+    "${YOI_LICENSING_DIR}/ThirdParty/monocypher/monocypher-ed25519.c"
     source/shared/bdd_drawing_library.cpp
     source/shared/bdd_preset_file.cpp
     source/shared/bdd_preset_library.cpp
     source/yoi_state.cpp
     "${YOI_EMBED_GENERATED}"
 )
-target_include_directories(yoi_common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/source/shared")
+target_include_directories(yoi_common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/source/shared" "${YOI_LICENSING_DIR}")
 target_link_libraries(yoi_common PUBLIC yoi_dsp)
 set_target_properties(yoi_common PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

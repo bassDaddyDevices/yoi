@@ -50,6 +50,7 @@ private:
     choc::value::Value presetStateValue();
     choc::value::Value drawingStateValue();
     choc::value::Value displayValue();
+    choc::value::Value licenseStateValue();
     void sendPresetState(const std::string& message = {}, bool error = false);
     void sendDrawingState(const std::string& message = {}, bool error = false);
 

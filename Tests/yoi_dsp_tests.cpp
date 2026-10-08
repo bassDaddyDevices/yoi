@@ -1881,6 +1881,35 @@ void testFinishExtremesStayBounded() {
 
 } // namespace
 
+
+void testDemoGate() {
+    // Licensed (a new kernel's default), the gate changes nothing; unlicensed, the last 3 s of
+    // every minute are silent, with 20 ms fades that never click (YOI_DOCS/decisions/licensing.md).
+    auto playFor = [](bool licensed) {
+        auto kernel = makeKernel();
+        kernel->setLicensed(licensed);
+        kernel->noteOn(40, 100);
+        return render(*kernel, frames(62.0), 2, 512);
+    };
+    const auto licensed = playFor(true);
+    const auto demo = playFor(false);
+    const auto at = [](double seconds) { return size_t(seconds * kSampleRate); };
+
+    CHECK(rms(licensed, at(57.2), at(59.8)) > 0.01, "licensed, the voice should play through the silent window");
+    CHECK(std::equal(licensed.begin(), licensed.begin() + long(at(56.9)), demo.begin()),
+          "unlicensed should be identical to licensed outside the silent window");
+    CHECK(rms(demo, at(57.05), at(59.95)) < 1e-6, "unlicensed should be silent from 57 s to 60 s, rms %g",
+          rms(demo, at(57.05), at(59.95)));
+    CHECK(rms(demo, at(60.1), at(61.9)) > 0.01, "unlicensed should play again after the silence");
+
+    double normalStep = 0.0;
+    double fadeStep = 0.0;
+    for (size_t i = at(30.0); i < at(31.0); ++i) normalStep = std::max(normalStep, double(std::fabs(demo[i] - demo[i - 1])));
+    for (size_t i = at(56.95); i < at(57.05); ++i) fadeStep = std::max(fadeStep, double(std::fabs(demo[i] - demo[i - 1])));
+    for (size_t i = at(59.95); i < at(60.05); ++i) fadeStep = std::max(fadeStep, double(std::fabs(demo[i] - demo[i - 1])));
+    CHECK(fadeStep <= normalStep * 1.05, "the fades should be no steeper than the sound itself: %g vs %g", fadeStep, normalStep);
+}
+
 int main() {
     testDefaultsMatchParameterTree();
     testParametersRoundTrip();
@@ -1943,6 +1972,7 @@ int main() {
     testParameterRamps();
     testNonFiniteValuesAreIgnored();
     testTailCoversTheRelease();
+    testDemoGate();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

@@ -1,0 +1,6 @@
+# Secrets and local tooling never go in the repo.
+*.env
+!*.env.example
+.dev.vars
+node_modules/
+.wrangler/

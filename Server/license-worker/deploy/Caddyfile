@@ -1,0 +1,7 @@
+# Caddy: gets and renews the HTTPS certificate itself.
+auth.bass-daddy.com {
+    request_body {
+        max_size 16KB
+    }
+    reverse_proxy 127.0.0.1:8787
+}

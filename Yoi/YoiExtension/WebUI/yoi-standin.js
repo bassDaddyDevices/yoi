@@ -72,6 +72,10 @@
         };
     }
 
+    // Licensing as an enforced, unlicensed build sees it, so the DEMO button and LICENSE page can be
+    // worked on. Any pasted "BDD1." line counts as licensed here; only the plug-in really checks.
+    let licenseState = { product: 'YOI', enforced: true, licensed: false, licensee: '', email: '' };
+
     window.bddStandIn = {
         handle(message) {
             switch (message.type) {
@@ -81,6 +85,7 @@
                         params: values,
                         curve: curve(),
                         drawingState: drawingState(),
+                        licenseState,
                         display: Object.assign({ position: 0, value: 1 }, filterDisplay(1)),
                     });
                     setInterval(() => {
@@ -124,6 +129,12 @@
                     const index = findDrawing(message.name);
                     if (index >= 0) userDrawings.splice(index, 1);
                     send({ drawingState: drawingState(), status: { message: 'Drawing deleted.', error: false } });
+                    break;
+                }
+                case 'licenseInstall': {
+                    const valid = String(message.license || '').startsWith('BDD1.');
+                    if (valid) licenseState = Object.assign({}, licenseState, { licensed: true, licensee: 'Stand-in Buyer' });
+                    send({ licenseState, status: { message: valid ? 'Licensed.' : 'That isn’t a Bass Daddy Devices license or key.', error: !valid } });
                     break;
                 }
                 case 'loadShape': {

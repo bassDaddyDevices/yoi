@@ -12,6 +12,7 @@
     const values = Object.create(null);
     const detailRows = Object.create(null);
     let detailsOpen = false;
+    let detailTabs = null;
     let shapeNames = [];
     let built = false;
     let filterGraph = null;
@@ -26,6 +27,11 @@
     let userDrawings = [];      // names of the user's own drawings, from the plug-in
     let drawingMenu = null;
     let pendingDrawingName = null;   // the drawing a delete dialog is asking about
+    /// What the plug-in says about its license: { product, enforced, licensed, message, licensee }.
+    /// The plug-in checks licenses; the page only shows the answer and passes on what's pasted.
+    let licenseState = null;
+    let licenseBusy = false;
+    const LICENSE_PAGE = 3;
 
     // The plug-in also lists the old Accelerate direction (5), for saved sessions, and plays it as
     // Forward with ACCEL on. The panel offers only these five, shows 5 as FORWARD with ACCEL lit,
@@ -368,12 +374,15 @@
             format: ottTime ? derivedDisplay(ottTime) : undefined,
         });
 
-        const tabs = tabBar(['VOICE', 'ENVELOPE', 'FINISH'], {
+        buildLicense();
+
+        const tabs = tabBar(['VOICE', 'ENVELOPE', 'FINISH', 'LICENSE'], {
             label: 'Settings pages',
             selected: 0,
             onSelect: showDetailsPage,
         });
         document.getElementById('details-tabs').appendChild(tabs.element);
+        detailTabs = tabs;
         document.getElementById('details-toggle').addEventListener('click', toggleDetails);
         document.getElementById('details-close').addEventListener('click', closeDetails);
         setupPresetControls();
@@ -385,6 +394,105 @@
             else if (drawingMenu) closeDrawingMenu();
             else if (detailsOpen) closeDetails();
         });
+    }
+
+    // MARK: Licensing
+
+    function buildLicense() {
+        const form = document.getElementById('license-form');
+        const input = document.getElementById('license-input');
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            activate(input.value);
+        });
+        // Inside a host, ⌘V usually goes to the host's Edit menu instead of this field, so the
+        // plug-in reads the clipboard itself: from the button, or when ⌘V/Ctrl+V reaches the field
+        // but nothing arrives.
+        const pasteNatively = async (andActivate) => {
+            const text = (await bdd.readClipboard()).trim();
+            if (!text) {
+                showLicenseMessage('The clipboard is empty. Copy the key from your receipt first.', true);
+                return;
+            }
+            input.value = text;
+            if (andActivate) activate(text);
+        };
+        document.getElementById('license-paste').addEventListener('click', () => pasteNatively(true));
+        input.addEventListener('keydown', (event) => {
+            if ((event.metaKey || event.ctrlKey) && (event.key === 'v' || event.key === 'V')) {
+                const before = input.value;
+                window.setTimeout(() => {
+                    if (input.value === before) pasteNatively(false);
+                }, 80);
+            }
+        });
+        // A .bddlicense file dropped anywhere on the page is pasted and activated.
+        const stage = document.getElementById('stage');
+        const section = document.querySelector('.license-section');
+        stage.addEventListener('dragover', (event) => {
+            if (!event.dataTransfer || !Array.from(event.dataTransfer.types || []).includes('Files')) return;
+            event.preventDefault();
+            section.classList.add('dropping');
+        });
+        stage.addEventListener('dragleave', () => section.classList.remove('dropping'));
+        stage.addEventListener('drop', (event) => {
+            const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+            section.classList.remove('dropping');
+            if (!file) return;
+            event.preventDefault();
+            file.text().then((text) => {
+                showLicensePage();
+                input.value = text.trim();
+                activate(text);
+            });
+        });
+        document.getElementById('license-badge').addEventListener('click', showLicensePage);
+    }
+
+    function showLicensePage() {
+        openDetails();
+        showDetailsPage(LICENSE_PAGE);
+        if (detailTabs && detailTabs.select) detailTabs.select(LICENSE_PAGE);
+    }
+
+    async function activate(text) {
+        if (licenseBusy || !licenseState) return;
+        licenseBusy = true;
+        showLicenseMessage('Activating…', false);
+        document.getElementById('license-activate').disabled = true;
+        try {
+            await bdd.activate(licenseState.product, text);
+            // The plug-in answers with licenseState and a status; see the receive handler.
+        } catch (error) {
+            licenseBusy = false;
+            showLicenseMessage(error.message, true);
+        } finally {
+            document.getElementById('license-activate').disabled = false;
+        }
+    }
+
+    function showLicenseMessage(message, error) {
+        const element = document.getElementById('license-message');
+        element.textContent = message || '';
+        element.classList.toggle('error', Boolean(error));
+    }
+
+    function renderLicense() {
+        if (!licenseState) return;
+        const unlocked = licenseState.licensed || !licenseState.enforced;
+        document.getElementById('license-badge').hidden = unlocked;
+        document.querySelector('.license-section').classList.toggle('licensed', Boolean(licenseState.licensed));
+        let summary;
+        if (licenseState.licensed) {
+            summary = 'Licensed to ' + (licenseState.licensee || licenseState.email || 'you') + '. Thank you!';
+        } else if (!licenseState.enforced) {
+            summary = 'Licensing isn’t switched on in this build, so YOI plays in full.';
+        } else {
+            summary = 'Demo: YOI goes silent for 3 seconds every minute until it’s activated. '
+                + 'Paste the license key from your purchase receipt.';
+        }
+        document.getElementById('license-summary').textContent = summary;
+        if (licenseState.licensed) document.getElementById('license-input').value = '';
     }
 
     function showDetailsPage(index) {
@@ -813,7 +921,17 @@
             userDrawings = Array.isArray(incoming.drawingState.drawings) ? incoming.drawingState.drawings : [];
             renderDrawingMenuItems();
         }
-        if (incoming.status) showPresetStatus(incoming.status.message || '', incoming.status.error === true);
+        if (incoming.licenseState) {
+            licenseState = incoming.licenseState;
+            renderLicense();
+        }
+        if (incoming.status && licenseBusy && incoming.licenseState) {
+            // The answer to an activation: shown on the LICENSE page rather than as a toast.
+            licenseBusy = false;
+            showLicenseMessage(incoming.status.message || '', incoming.status.error === true);
+        } else if (incoming.status) {
+            showPresetStatus(incoming.status.message || '', incoming.status.error === true);
+        }
     });
 
     buildDrawingsMenu();

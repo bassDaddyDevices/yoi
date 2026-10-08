@@ -7,6 +7,11 @@
 
 #include "yoi_ids.h"
 
+#include "shared/bdd_platform.h"
+#include "shared/bdd_text_files.h"
+
+#include "BDDLicenseStore.hpp"
+
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
@@ -53,7 +58,14 @@ tresult PLUGIN_API Processor::initialize(FUnknown* context) {
     }
     addEventInput(STR16("MIDI In"), 1);
     addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
+    reloadLicense();
     return kResultOk;
+}
+
+void Processor::reloadLicense() {
+    const auto license = bdd::license::loadFromFolder(bdd::vst3::utf8FromPath(bdd::vst3::platform::licensesDirectory()),
+                                                      kSynthName, kProductMajor);
+    mKernel->setLicensed(bdd::license::unlocks(license));
 }
 
 /// No audio in; mono or stereo out. The voice is mono-safe: left plus right is the dry sound.
@@ -315,6 +327,10 @@ void Processor::publishDrawingLocked() {
 tresult PLUGIN_API Processor::notify(IMessage* message) {
     if (message == nullptr) {
         return kInvalidArgument;
+    }
+    if (FIDStringsEqual(message->getMessageID(), kLicenseChangedMessage)) {
+        reloadLicense();
+        return kResultOk;
     }
     if (FIDStringsEqual(message->getMessageID(), kDrawingMessage)) {
         const void* data = nullptr;

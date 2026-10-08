@@ -9,7 +9,7 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-project(YoiDSPTests LANGUAGES CXX)
+project(YoiDSPTests LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,5 +30,17 @@ else()
     target_compile_options(yoi_dsp_tests PRIVATE -Wall -Wextra -Wshadow)
 endif()
 
+# The shared license checker, with the Monocypher it vendors (BSD-2-Clause or CC0).
+set(YOI_LICENSING_DIR "${YOI_EXTENSION_DIR}/Licensing")
+add_executable(bdd_license_tests
+    bdd_license_tests.cpp
+    "${YOI_LICENSING_DIR}/ThirdParty/monocypher/monocypher.c"
+    "${YOI_LICENSING_DIR}/ThirdParty/monocypher/monocypher-ed25519.c"
+)
+target_include_directories(bdd_license_tests PRIVATE "${YOI_LICENSING_DIR}")
+target_compile_definitions(bdd_license_tests PRIVATE
+    YOI_LICENSE_VECTOR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/license-vector.txt")
+
 enable_testing()
 add_test(NAME yoi_dsp_tests COMMAND yoi_dsp_tests)
+add_test(NAME bdd_license_tests COMMAND bdd_license_tests)

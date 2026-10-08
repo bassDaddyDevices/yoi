@@ -41,6 +41,11 @@ std::filesystem::path productDirectory(const std::string& product) {
     return std::filesystem::path(folder.fileSystemRepresentation);
 }
 
+std::string clipboardText() {
+    NSString* text = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    return text != nil ? std::string(text.UTF8String) : std::string();
+}
+
 void revealInFileBrowser(const std::filesystem::path& folder) {
     NSString* path = [NSString stringWithUTF8String:folder.c_str()];
     if (path != nil) {

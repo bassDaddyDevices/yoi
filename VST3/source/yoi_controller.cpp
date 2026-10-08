@@ -13,6 +13,9 @@
 #endif
 
 #include "shared/bdd_platform.h"
+#include "shared/bdd_text_files.h"
+
+#include "BDDLicenseStore.hpp"
 #include "shared/bdd_spec_parameter.h"
 
 #include "choc/text/choc_JSON.h"
@@ -71,6 +74,8 @@ tresult PLUGIN_API Controller::initialize(FUnknown* context) {
     bend->setNormalized(0.5);
     parameters.addParameter(bend);
 
+    mLicense = bdd::license::loadFromFolder(bdd::vst3::utf8FromPath(bdd::vst3::platform::licensesDirectory()),
+                                            kSynthName, kProductMajor);
     return kResultOk;
 }
 
@@ -266,6 +271,21 @@ void Controller::sendDrawingToProcessor() {
     message->setMessageID(kDrawingMessage);
     message->getAttributes()->setBinary(kDrawingAttribute, values.data(), uint32(values.size() * sizeof(float)));
     sendMessage(message);
+}
+
+// MARK: - Licensing
+
+bdd::license::License Controller::installLicense(const std::string& token) {
+    const auto result = bdd::license::installInFolder(bdd::vst3::utf8FromPath(bdd::vst3::platform::licensesDirectory()),
+                                                      token, kSynthName, kProductMajor);
+    if (result.isValid()) {
+        mLicense = result;
+        if (IPtr<IMessage> message = owned(allocateMessage())) {
+            message->setMessageID(kLicenseChangedMessage);
+            sendMessage(message);
+        }
+    }
+    return result;
 }
 
 // MARK: - Libraries

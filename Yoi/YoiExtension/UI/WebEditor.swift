@@ -292,6 +292,17 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 sendPresetState(message: "Could not delete that preset.", error: true)
             }
 
+        case "clipboardRead":
+            // Hosts route ⌘V to their own Edit menu, so the page asks for the clipboard instead.
+            let token = (body["token"] as? NSNumber)?.intValue ?? 0
+            let text = NSPasteboard.general.string(forType: .string) ?? ""
+            send(["clipboard": ["token": token, "text": text]])
+
+        case "licenseInstall":
+            guard let token = body["license"] as? String else { return }
+            let result = audioUnit.installLicense(token)
+            send(["licenseState": audioUnit.licenseState, "status": ["message": result.message, "error": !result.valid]])
+
         case "error":
             let text = body["message"] as? String ?? "?"
             let source = (body["source"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
@@ -373,6 +384,7 @@ final class WebEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             "curve": curveState(),
             "presetState": presetState(from: audioUnit),
             "drawingState": drawingState(),
+            "licenseState": audioUnit.licenseState,
             // Included so the filter graph has something to draw on the page's first frame.
             "display": Self.displayPayload(display: display, filter: filter, meters: audioUnit.outputMeters),
         ])

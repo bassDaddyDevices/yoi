@@ -30,6 +30,7 @@
 #include "YoiExtensionParameterAddresses.h"
 #include "YoiFactoryShapes.hpp"
 #include "Shared/BDDAtomics.hpp"
+#include "Shared/BDDDemoGate.hpp"
 #include "Shared/BDDDenormals.hpp"
 #include "Shared/BDDDrawnCurve.hpp"
 #include "Shared/BDDDownsamplers.hpp"
@@ -119,6 +120,7 @@ public:
         mAppliedOttTime = -1.0f;   // applied again at the next block, at the new rate
         mOttWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mDimension.setSampleRate(inSampleRate);
+        mDemoGate.setSampleRate(inSampleRate);
         mFoldPositionBlend.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mCleanupWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
         mSampleHoldWeight.setDuration(kModeCrossfadeSeconds, inSampleRate);
@@ -403,6 +405,19 @@ public:
     /// release, plus the OTT's slowest release and the width's delays dying away after it.
     float tailSeconds() const {
         return mReleaseMilliseconds * 0.001f + kTailMarginSeconds;
+    }
+
+    // MARK: - Licensing
+
+    /// Whether this copy is licensed (the format's wrapper decides, from a checked license; the
+    /// kernel never sees one). Unlicensed, the output goes silent for a few seconds every minute
+    /// (bdd::DemoGate). Any thread. A new kernel is licensed, so tests and unconfigured builds play.
+    void setLicensed(bool licensed) {
+        mDemoGate.setLicensed(licensed);
+    }
+
+    bool isLicensed() const {
+        return mDemoGate.isLicensed();
     }
 
     // MARK: - Max Frames
@@ -698,6 +713,7 @@ public:
             // modulating, so it sits at the top of the drawing, where the envelope leaves it alone.
             storeFilterDisplayFromSmoothers(1.0);
             publishMeters(0.0f, 0.0f, frameCount);
+            mDemoGate.advance(frameCount);
             for (auto* buffer : outputBuffers) {
                 std::fill_n(buffer, frameCount, 0.f);
             }
@@ -911,8 +927,10 @@ public:
             // POWER, part two: a little louder, sub and all, so turning it up adds body and not
             // just density.
             const double level = double(outputGain) * std::exp2(kPowerLiftDecibels * powerAmount / 6.020599913);
-            const float left = bdd::softLimit(float((stereo.left + subVoice) * level));
-            const float right = bdd::softLimit(float((stereo.right + subVoice) * level));
+            // Unlicensed, a few seconds of silence every minute; licensed, exactly 1.
+            const float demoGain = mDemoGate.next();
+            const float left = bdd::softLimit(float((stereo.left + subVoice) * level)) * demoGain;
+            const float right = bdd::softLimit(float((stereo.right + subVoice) * level)) * demoGain;
             nonFinite |= !std::isfinite(left + right);
 
             if (outputBuffers.size() == 1) {
@@ -1640,6 +1658,7 @@ private:
     bdd::HarmonicBooster mHarmonicBooster;
     bdd::LevelMatch mBoostLevel;
     bdd::Saturator mPowerSaturator;
+    bdd::DemoGate mDemoGate;
     bdd::LevelMatch mPowerLevel;
     bdd::DCBlocker mPowerDC;
     bdd::MultibandCompressor mOtt;

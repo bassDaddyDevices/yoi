@@ -1,0 +1,14 @@
+{
+  "name": "bdd-license-worker",
+  "private": true,
+  "type": "module",
+  "description": "auth.bass-daddy.com: trades Gumroad license keys for signed Bass Daddy Devices licenses.",
+  "scripts": {
+    "test": "node --test test/",
+    "start": "node src/node-server.mjs",
+    "make-keys": "node scripts/make-keys.mjs",
+    "make-test-vector": "node scripts/make-test-vector.mjs",
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy"
+  }
+}

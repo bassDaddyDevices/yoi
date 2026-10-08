@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import CxxStdlib
 
 public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 {
@@ -31,6 +32,7 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		outputBus = try AUAudioUnitBus(format: self.format)
         outputBus?.maximumChannelCount = 2
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: AUAudioUnitBusType.output, busses: [outputBus!])
+        reloadLicense()
 	}
 
     deinit {
@@ -284,6 +286,53 @@ public class YoiExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
             kernel.pointee.setEnvelopeCurve(xs, ys, bends, Int32(newValue.count))
             _curveRevision &+= 1
         }
+    }
+
+    // MARK: - Licensing
+    // YOI_DOCS/decisions/licensing.md. The shared C++ store checks and keeps licenses, the same as
+    // the VST3; this only says where (the extension's own container) and tells the kernel.
+
+    static let productName = "YOI"
+    static let productMajor: Int32 = 1
+
+    /// Application Support/Bass Daddy Devices/Licenses, inside the extension's sandbox container.
+    private static var licensesFolder: String {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("Bass Daddy Devices/Licenses", isDirectory: true).path
+    }
+
+    /// The license this copy runs under.
+    private(set) var license = bdd.license.License()
+
+    func reloadLicense() {
+        license = bdd.license.loadFromFolder(std.string(Self.licensesFolder), std.string(Self.productName), Self.productMajor)
+        kernel.pointee.setLicensed(bdd.license.unlocks(license))
+    }
+
+    /// Checks a pasted license and, if it's valid, keeps it and plays in full. Returns whether it
+    /// worked and what to tell the user.
+    func installLicense(_ token: String) -> (valid: Bool, message: String) {
+        let result = bdd.license.installInFolder(std.string(Self.licensesFolder), std.string(token),
+                                                 std.string(Self.productName), Self.productMajor)
+        guard result.isValid() else {
+            return (false, String(cString: bdd.license.describe(result.status)))
+        }
+        reloadLicense()
+        let name = String(result.licensee).isEmpty ? String(result.email) : String(result.licensee)
+        return (true, "Licensed to \(name). Thank you!")
+    }
+
+    /// What the editor's LICENSE page shows.
+    var licenseState: [String: Any] {
+        [
+            "product": Self.productName,
+            "enforced": bdd.license.kLicensingEnforced,
+            "licensed": license.isValid(),
+            "message": String(cString: bdd.license.describe(license.status)),
+            "licensee": String(license.licensee),
+            "email": String(license.email),
+        ]
     }
 
     // MARK: - State

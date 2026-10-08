@@ -1,0 +1,25 @@
+# systemd unit for the license server on the VPS.
+#   sudo cp deploy/bdd-license.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now bdd-license
+#   journalctl -u bdd-license -f        (its log)
+[Unit]
+Description=Bass Daddy Devices license server (auth.bass-daddy.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The app lives in /opt/bdd-license (a copy of Server/license-worker); its secrets in the env file.
+WorkingDirectory=/opt/bdd-license
+ExecStart=/usr/bin/node src/node-server.mjs
+EnvironmentFile=/etc/bdd-license.env
+Restart=on-failure
+RestartSec=2
+# A user with no shell and no home, so a bug here can't touch the rest of the server.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

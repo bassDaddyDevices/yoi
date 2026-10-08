@@ -52,6 +52,9 @@ public:
     static bool writeStateStream(Steinberg::IBStream* stream, const State& state);
 
 private:
+    /// Reads the licenses folder and tells the kernel whether to play in full. Main thread.
+    void reloadLicense();
+
     /// Hands the drawing to the kernel. Callers hold `mDrawingMutex`: the kernel takes one writer.
     void publishDrawingLocked();
 

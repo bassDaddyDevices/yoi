@@ -8,6 +8,10 @@
 #include "yoi_controller.h"
 #include "yoi_params.h"
 
+#include "shared/bdd_platform.h"
+
+#include "BDDLicenseKey.hpp"
+
 #include "choc/containers/choc_Value.h"
 
 #include <cstdio>
@@ -222,6 +226,24 @@ void Editor::handleMessage(const std::string& type, const choc::value::ValueView
         sendFullState();
         sendPresetState("Preset deleted.");
 
+    } else if (type == "clipboardRead") {
+        // Hosts route ⌘V to their own Edit menu, so the page asks for the clipboard instead.
+        auto clipboard = choc::value::createObject("");
+        clipboard.setMember("token", integerMember(message, "token", 0));
+        clipboard.setMember("text", bdd::vst3::platform::clipboardText());
+        auto state = choc::value::createObject("");
+        state.setMember("clipboard", clipboard);
+        send(state);
+
+    } else if (type == "licenseInstall") {
+        const auto result = yoi.installLicense(stringMember(message, "license"));
+        auto state = choc::value::createObject("");
+        state.setMember("licenseState", licenseStateValue());
+        state.setMember("status", status(result.isValid() ? "Licensed to " + (result.licensee.empty() ? result.email : result.licensee) + ". Thank you!"
+                                                          : std::string(bdd::license::describe(result.status)),
+                                         !result.isValid()));
+        send(state);
+
     } else if (type == "error") {
         std::fprintf(stderr, "YOI editor script error: %s (%s:%lld)\n", stringMember(message, "message").c_str(),
                      stringMember(message, "source").c_str(), (long long)integerMember(message, "line", 0));
@@ -286,6 +308,7 @@ void Editor::sendFullState() {
     state.setMember("curve", curveValue());
     state.setMember("presetState", presetStateValue());
     state.setMember("drawingState", drawingStateValue());
+    state.setMember("licenseState", licenseStateValue());
     // Included so the filter graph has something to draw on the page's first frame.
     state.setMember("display", displayValue());
     send(state);
@@ -353,6 +376,18 @@ choc::value::Value Editor::displayValue() {
     display.setMember("meterLeft", yoi.display(kDisplayMeterLeftId));
     display.setMember("meterRight", yoi.display(kDisplayMeterRightId));
     return display;
+}
+
+choc::value::Value Editor::licenseStateValue() {
+    const auto& license = controller().license();
+    auto value = choc::value::createObject("");
+    value.setMember("product", std::string(kSynthName));
+    value.setMember("enforced", bdd::license::kLicensingEnforced);
+    value.setMember("licensed", license.isValid());
+    value.setMember("message", std::string(bdd::license::describe(license.status)));
+    value.setMember("licensee", license.licensee);
+    value.setMember("email", license.email);
+    return value;
 }
 
 void Editor::sendCurve() {

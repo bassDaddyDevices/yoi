@@ -30,6 +30,16 @@ void detachView(void* child);
 /// format but not the same files.
 std::filesystem::path productDirectory(const std::string& product);
 
+/// Where Bass Daddy Devices licenses are kept, shared by every synth (BDDLicenseStore.hpp):
+/// `Bass Daddy Devices/Licenses` beside the synths' own folders.
+inline std::filesystem::path licensesDirectory() {
+    return productDirectory("Licenses");
+}
+
+/// The clipboard's text (UTF-8), or empty. Hosts route paste shortcuts to their own Edit menu,
+/// so the editor reads the clipboard through this instead.
+std::string clipboardText();
+
 /// Opens `folder` in Finder or Explorer.
 void revealInFileBrowser(const std::filesystem::path& folder);
 
