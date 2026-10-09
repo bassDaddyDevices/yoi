@@ -49,6 +49,8 @@ choc::value::Value auDescriptor() {
     if (!bdd::vst3::readTextFile(YOI_STANDIN_JS, text)) {
         return {};
     }
+    // A Windows checkout has CRLF line endings (.gitattributes: text=auto); the JSON has no raw CRs.
+    std::erase(text, '\r');
     const std::string marker = "const SNAPSHOT = ";
     const auto start = text.find(marker);
     const auto end = text.find(";\n", start);
