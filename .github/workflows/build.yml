@@ -1,0 +1,102 @@
+# Builds and tests what can be built off a Mac: the Windows VST3 (with Steinberg's validator), the
+# DSP and license tests on Windows (MSVC) and Linux (GCC), and the license server's tests. The AU
+# needs Xcode and signing, so it stays on the Mac.
+#
+# The private repo spends GitHub Actions minutes (Windows counts double), so: the SDK and choc
+# are cached, Markdown-only changes don't run, and a newer push cancels the run it replaces.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The same versions the Mac build uses (VST3/CMakeLists.txt).
+  VST3_SDK_TAG: v3.8.1_build_84
+  CHOC_COMMIT: 9606a6615b592605993d92733cdfd6ca6ecbd825
+
+jobs:
+  windows-vst3:
+    name: Windows VST3 (x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the VST3 SDK and choc
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ runner.os }}-${{ env.VST3_SDK_TAG }}-${{ env.CHOC_COMMIT }}
+
+      - name: Fetch the VST3 SDK (MIT) and choc (ISC)
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$VST3_SDK_TAG" https://github.com/steinbergmedia/vst3sdk.git deps/vst3sdk
+          git -C deps/vst3sdk submodule update --init --depth 1 base pluginterfaces public.sdk cmake
+          git init -q deps/choc
+          git -C deps/choc fetch -q --depth 1 https://github.com/Tracktion/choc.git "$CHOC_COMMIT"
+          git -C deps/choc checkout -q FETCH_HEAD
+
+      - name: Configure
+        shell: bash
+        run: >
+          cmake -S VST3 -B VST3/build -G "Visual Studio 17 2022" -A x64
+          -DVST3_SDK_DIR="$GITHUB_WORKSPACE/deps/vst3sdk"
+          -DCHOC_DIR="$GITHUB_WORKSPACE/deps/choc"
+
+      # Steinberg's validator runs on the plug-in as part of this build; a failure fails the job.
+      - name: Build YOI.vst3 and its tests
+        run: cmake --build VST3/build --config Release --target YOI yoi_vst3_tests --parallel
+
+      - name: VST3 tests
+        run: ctest --test-dir VST3/build -C Release --output-on-failure
+
+      - name: DSP and license tests (MSVC)
+        run: |
+          cmake -S Tests -B Tests/build -G "Visual Studio 17 2022" -A x64
+          cmake --build Tests/build --config Release --parallel
+          ctest --test-dir Tests/build -C Release --output-on-failure
+
+      - name: Upload YOI.vst3
+        uses: actions/upload-artifact@v4
+        with:
+          name: YOI-vst3-windows-x64
+          path: VST3/build/VST3/Release/YOI.vst3
+          retention-days: 14
+
+  linux-tests:
+    name: DSP and license tests (Linux, GCC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run
+        run: |
+          cmake -S Tests -B Tests/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build Tests/build --parallel
+          ctest --test-dir Tests/build --output-on-failure
+
+  license-server:
+    name: License server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm test
+        working-directory: Server/license-worker
+        run: npm test
