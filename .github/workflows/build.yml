@@ -30,11 +30,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Cache the VST3 SDK and choc
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: deps
           key: deps-${{ runner.os }}-${{ env.VST3_SDK_TAG }}-${{ env.CHOC_COMMIT }}
@@ -52,7 +52,7 @@ jobs:
       - name: Configure
         shell: bash
         run: >
-          cmake -S VST3 -B VST3/build -G "Visual Studio 17 2022" -A x64
+          cmake -S VST3 -B VST3/build -A x64
           -DVST3_SDK_DIR="$GITHUB_WORKSPACE/deps/vst3sdk"
           -DCHOC_DIR="$GITHUB_WORKSPACE/deps/choc"
 
@@ -65,7 +65,7 @@ jobs:
 
       - name: DSP and license tests (MSVC)
         run: |
-          cmake -S Tests -B Tests/build -G "Visual Studio 17 2022" -A x64
+          cmake -S Tests -B Tests/build -A x64
           cmake --build Tests/build --config Release --parallel
           ctest --test-dir Tests/build -C Release --output-on-failure
 
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and run
         run: |
           cmake -S Tests -B Tests/build -DCMAKE_BUILD_TYPE=Release
@@ -93,8 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: npm test
