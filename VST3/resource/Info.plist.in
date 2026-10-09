@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  YOI.vst3's Info.plist, filled in by CMake (configure_file, @VAR@). The SDK only writes one for
+  Xcode builds; without this, other generators leave an application-style plist (APPL, no
+  identifier), which hosts such as Live skip.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleExecutable</key>
+    <string>YOI</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.bassdaddydevices.yoi.vst3</string>
+    <key>CFBundleName</key>
+    <string>YOI</string>
+    <key>CFBundleDisplayName</key>
+    <string>YOI</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@PROJECT_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@PROJECT_VERSION@</string>
+    <key>CFBundleGetInfoString</key>
+    <string>YOI @PROJECT_VERSION@, Bass Daddy Devices</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© @YOI_COPYRIGHT_YEAR@ Bass Daddy Devices</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
+    <key>CSResourcesFileMapped</key>
+    <true/>
+</dict>
+</plist>

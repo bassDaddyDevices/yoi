@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-mac.sh: build YOI.vst3 on macOS, run its tests, and link it into ~/Library/Audio/Plug-Ins/VST3.
+# build-mac.sh: build YOI.vst3 on macOS, run its tests, and install a signed copy in ~/Library/Audio/Plug-Ins/VST3.
 #
 # Steinberg's validator runs on the plug-in as part of the build. The result is ad-hoc signed,
 # which is enough to run it on this Mac.
@@ -33,4 +33,4 @@ ctest --test-dir "$BUILD_DIR" --output-on-failure
 
 echo
 echo "Built:       $BUILD_DIR/VST3/$CONFIGURATION/YOI.vst3"
-echo "Linked into: ~/Library/Audio/Plug-Ins/VST3/YOI.vst3"
+echo "Installed:   ~/Library/Audio/Plug-Ins/VST3/YOI.vst3 (a signed copy, made after the validator passed)"

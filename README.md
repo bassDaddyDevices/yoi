@@ -55,7 +55,7 @@ auval -v aumu yoi1 Bsdd                                  # validate once the app
 VST3/scripts/build-mac.sh          # configure, build, run Steinberg's validator and the tests
 ```
 
-That links `YOI.vst3` into `~/Library/Audio/Plug-Ins/VST3`; rescan plug-ins and it appears as **YOI** by Bass Daddy Devices. The first configure downloads the VST3 SDK (v3.8.1, MIT) and choc (ISC); point `VST3_SDK_DIR` and `CHOC_DIR` at existing checkouts to skip that. The VST3 compiles in the editor page from `Yoi/YoiExtension/WebUI` and the presets from `Presets/Factory`, so rebuild it after changing either. Its own presets and drawings live in `~/Library/Application Support/Bass Daddy Devices/YOI`.
+That installs a signed copy of `YOI.vst3` in `~/Library/Audio/Plug-Ins/VST3` (a real copy, not a link: hosts don't reliably follow links onto another drive); rescan plug-ins and it appears as **YOI** by Bass Daddy Devices. The first configure downloads the VST3 SDK (v3.8.1, MIT) and choc (ISC); point `VST3_SDK_DIR` and `CHOC_DIR` at existing checkouts to skip that. The VST3 compiles in the editor page from `Yoi/YoiExtension/WebUI` and the presets from `Presets/Factory`, so rebuild it after changing either. Its own presets and drawings live in `~/Library/Application Support/Bass Daddy Devices/YOI`.
 
 ## Working on the editor
 

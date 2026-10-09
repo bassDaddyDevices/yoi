@@ -46,10 +46,11 @@ set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "" FORCE)
 set(SMTG_ENABLE_AUV2_BUILDS OFF CACHE BOOL "" FORCE)
 
-# Linking into the system VST3 folder needs admin rights (or Developer Mode) on Windows.
-if(WIN32)
-    set(SMTG_CREATE_PLUGIN_LINK OFF CACHE BOOL "Link the built plug-in into the VST3 folder")
-endif()
+# The SDK would put a symlink to the build in the system VST3 folder. Hosts don't reliably follow a
+# link onto another volume (this workspace is on an external drive), so YOI copies the finished
+# bundle there instead (YOI_INSTALL_LOCAL, below), and only once the validator has passed.
+set(SMTG_CREATE_PLUGIN_LINK OFF CACHE BOOL "Link the built plug-in into the VST3 folder" FORCE)
+option(YOI_INSTALL_LOCAL "Copy the built YOI.vst3 into ~/Library/Audio/Plug-Ins/VST3 (macOS)" ON)
 
 # ---- Dependencies ----------------------------------------------------------------------------
 # Both are free and permissively licensed: the VST3 SDK (MIT since 3.8) and choc (ISC). The same
@@ -226,6 +227,30 @@ if(SMTG_MAC)
         BUNDLE_IDENTIFIER "com.bassdaddydevices.yoi.vst3"
         COMPANY_NAME "Bass Daddy Devices"
     )
+    # The SDK only writes the bundle's Info.plist for Xcode builds; this does it for every
+    # generator, so the bundle is a proper plug-in bundle (BNDL, with an identifier and version).
+    string(TIMESTAMP YOI_COPYRIGHT_YEAR "%Y")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/resource/Info.plist.in"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/Info.plist" @ONLY)
+    set_target_properties(YOI PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/generated/Info.plist"
+        XCODE_ATTRIBUTE_INFOPLIST_FILE "${CMAKE_CURRENT_BINARY_DIR}/generated/Info.plist")
+
+    if(YOI_INSTALL_LOCAL)
+        # After the SDK's own post-build steps (moduleinfo, the validator), so a plug-in that fails
+        # validation never reaches the hosts. A real copy, replacing any old link.
+        set(YOI_LOCAL_VST3 "$ENV{HOME}/Library/Audio/Plug-Ins/VST3/YOI.vst3")
+        # The linker signs only the binary; hosts check the whole bundle, so sign that (ad hoc,
+        # which is enough on this Mac; see README.md for a Developer ID copy to give away). PkgInfo
+        # is what Xcode-built bundles carry, and what Finder uses to show the bundle as one item.
+        add_custom_command(TARGET YOI POST_BUILD
+            COMMAND /bin/sh -c "printf 'BNDL????' > \"$<TARGET_BUNDLE_CONTENT_DIR:YOI>/PkgInfo\""
+            COMMAND codesign --force --sign - --timestamp=none "$<TARGET_BUNDLE_DIR:YOI>"
+            COMMAND rm -rf "${YOI_LOCAL_VST3}"
+            COMMAND ditto "$<TARGET_BUNDLE_DIR:YOI>" "${YOI_LOCAL_VST3}"
+            COMMENT "Signing YOI.vst3 and installing it into ~/Library/Audio/Plug-Ins/VST3"
+            VERBATIM)
+    endif()
 endif()
 
 # ---- Tests -----------------------------------------------------------------------------------
